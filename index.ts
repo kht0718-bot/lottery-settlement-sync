@@ -22,7 +22,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value
 const connectionUrl = new URL(databaseUrl);
 connectionUrl.searchParams.delete("ssl-mode");
 const databaseCa = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
-const databaseTls = databaseCa ? { ca: databaseCa, rejectUnauthorized: true } : { rejectUnauthorized: false };
+const databaseTls = databaseCa ? { ca: databaseCa, rejectUnauthorized: true, servername: connectionUrl.hostname } : { rejectUnauthorized: false, servername: connectionUrl.hostname };
 if (!databaseCa) console.warn("DATABASE_CA_CERT가 없어 Aiven TLS 암호화 연결을 CA 검증 없이 사용합니다.");
 const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: databaseTls, waitForConnections: true, connectionLimit: 5 });
 
@@ -93,8 +93,8 @@ const decodeToken = (token: string): TokenPayload | null => {
     const [text, signature] = token.split(".");
     if (!text || !signature) return null;
     const expected = crypto.createHmac("sha256", tokenSecret).update(text).digest("base64url");
-    const receivedBuffer = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expected);
+    const receivedBuffer = Buffer.from(signature, "base64url");
+    const expectedBuffer = Buffer.from(expected, "base64url");
     if (receivedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(receivedBuffer, expectedBuffer)) return null;
     const payload = JSON.parse(Buffer.from(text, "base64url").toString("utf8")) as TokenPayload;
     return typeof payload.deviceId === "string" && Number.isFinite(payload.expiresAt) && payload.expiresAt > Date.now() ? payload : null;
@@ -191,10 +191,13 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
   console.error(error);
   response.status(500).json({ message: "서버 처리 중 오류가 발생했습니다." });
 });
+process.on("unhandledRejection", (error) => process.stderr.write(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`));
+process.on("uncaughtException", (error) => process.stderr.write(`uncaught exception: ${error.stack ?? error.message}\n`));
 void initializeDatabase()
   .then(() => app.listen(port, () => console.log(`lottery sync API started on port ${port}`)))
   .catch(async (error) => {
-    console.error("lottery sync API database initialization failed", error);
-    await pool.end();
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`lottery sync API database initialization failed: ${message}\n`);
+    await pool.end().catch(() => undefined);
     process.exit(1);
   });
