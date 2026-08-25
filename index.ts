@@ -22,6 +22,42 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value
 const connectionUrl = new URL(databaseUrl);
 connectionUrl.searchParams.delete("ssl-mode");
 const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: { rejectUnauthorized: true }, waitForConnections: true, connectionLimit: 5 });
+
+const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS devices (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    created_at BIGINT NOT NULL,
+    last_seen_at BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlements (
+    id VARCHAR(96) PRIMARY KEY,
+    business_date DATE NOT NULL,
+    author_id VARCHAR(64) NOT NULL,
+    author_name VARCHAR(120) NOT NULL,
+    author_role ENUM('admin','employee') NOT NULL,
+    settlement_status VARCHAR(40) NOT NULL,
+    updated_at BIGINT NOT NULL,
+    payload_json JSON NOT NULL,
+    INDEX idx_settlements_date (business_date),
+    INDEX idx_settlements_updated (updated_at)
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlement_events (
+    id VARCHAR(96) PRIMARY KEY,
+    settlement_id VARCHAR(96) NOT NULL,
+    device_id VARCHAR(64) NOT NULL,
+    event_type VARCHAR(60) NOT NULL,
+    created_at BIGINT NOT NULL,
+    payload_json JSON NOT NULL,
+    INDEX idx_events_settlement (settlement_id)
+  )`,
+];
+
+const initializeDatabase = async () => {
+  for (const statement of schemaStatements) await pool.query(statement);
+  console.log("lottery sync API database schema ready");
+};
+
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
@@ -152,4 +188,10 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
   console.error(error);
   response.status(500).json({ message: "서버 처리 중 오류가 발생했습니다." });
 });
-app.listen(port, () => console.log(`lottery sync API started on port ${port}`));
+void initializeDatabase()
+  .then(() => app.listen(port, () => console.log(`lottery sync API started on port ${port}`)))
+  .catch(async (error) => {
+    console.error("lottery sync API database initialization failed", error);
+    await pool.end();
+    process.exit(1);
+  });
