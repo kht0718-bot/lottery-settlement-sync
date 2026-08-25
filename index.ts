@@ -11,7 +11,7 @@ const required = (name: string) => {
 };
 
 const databaseUrl = required("DATABASE_URL");
-const pairCode = required("PAIR_CODE");
+const pairCode = required("PAIR_CODE_V2");
 const tokenSecret = required("TOKEN_SECRET");
 if (pairCode.length < 12) throw new Error("PAIR_CODE는 12자 이상이어야 합니다.");
 if (tokenSecret.length < 32) throw new Error("TOKEN_SECRET은 32자 이상이어야 합니다.");
