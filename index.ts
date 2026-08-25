@@ -21,7 +21,10 @@ const maxDevices = Math.max(1, Number(process.env.MAX_DEVICES ?? 5));
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const connectionUrl = new URL(databaseUrl);
 connectionUrl.searchParams.delete("ssl-mode");
-const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: { rejectUnauthorized: true }, waitForConnections: true, connectionLimit: 5 });
+const databaseCa = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
+const databaseTls = databaseCa ? { ca: databaseCa, rejectUnauthorized: true } : { rejectUnauthorized: false };
+if (!databaseCa) console.warn("DATABASE_CA_CERT가 없어 Aiven TLS 암호화 연결을 CA 검증 없이 사용합니다.");
+const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: databaseTls, waitForConnections: true, connectionLimit: 5 });
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS devices (
