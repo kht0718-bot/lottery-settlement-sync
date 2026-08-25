@@ -19,7 +19,9 @@ if (tokenSecret.length < 32) throw new Error("TOKEN_SECRET은 32자 이상이어
 const port = Number(process.env.PORT ?? 3000);
 const maxDevices = Math.max(1, Number(process.env.MAX_DEVICES ?? 5));
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-const pool = mysql.createPool({ uri: databaseUrl, ssl: { rejectUnauthorized: true }, waitForConnections: true, connectionLimit: 5 });
+const connectionUrl = new URL(databaseUrl);
+connectionUrl.searchParams.delete("ssl-mode");
+const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: { rejectUnauthorized: true }, waitForConnections: true, connectionLimit: 5 });
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
