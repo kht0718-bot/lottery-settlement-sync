@@ -12,7 +12,5 @@
     "mysql2": "^3.16.0",
     "zod": "^4.2.1"
   },
-  "devDependencies": {
-    "esbuild": "^0.25.12"
-  }
+  "devDependencies": { "esbuild": "^0.25.12" }
 }

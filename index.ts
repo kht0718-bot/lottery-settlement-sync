@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import mysql, { type RowDataPacket } from "mysql2/promise";
 import { z } from "zod";
+import { registerStaffSyncRoutes } from "./staff-sync.js";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -18,6 +19,7 @@ if (tokenSecret.length < 32) throw new Error("TOKEN_SECRET은 32자 이상이어
 
 const port = Number(process.env.PORT ?? 3000);
 const maxDevices = Math.max(1, Number(process.env.MAX_DEVICES ?? 5));
+const adminApiToken = process.env.ADMIN_API_TOKEN ?? pairCode;
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const connectionUrl = new URL(databaseUrl);
 connectionUrl.searchParams.delete("ssl-mode");
@@ -54,6 +56,12 @@ const schemaStatements = [
     payload_json JSON NOT NULL,
     INDEX idx_events_settlement (settlement_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS settlement_staff (id VARCHAR(64) PRIMARY KEY, name VARCHAR(120) NOT NULL, phone VARCHAR(40), role ENUM('admin','employee') NOT NULL DEFAULT 'employee', status ENUM('active','deleted') NOT NULL DEFAULT 'active', version BIGINT NOT NULL DEFAULT 1, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL, deletedAt BIGINT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settlement_staff_change_log (id BIGINT AUTO_INCREMENT PRIMARY KEY, staffId VARCHAR(64) NOT NULL, changeType ENUM('created','updated','deleted') NOT NULL, version BIGINT NOT NULL, payloadJson TEXT NOT NULL, changedBy VARCHAR(64) NULL, changedAt BIGINT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settlement_devices (id VARCHAR(96) PRIMARY KEY, deviceFingerprint VARCHAR(160) NOT NULL UNIQUE, deviceName VARCHAR(120) NOT NULL, staffId VARCHAR(64) NULL, status ENUM('active','reset_pending','revoked','candidate') NOT NULL DEFAULT 'active', lastSyncAt BIGINT NULL, lastSeenAt BIGINT NULL, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settlement_device_action_approvals (id BIGINT AUTO_INCREMENT PRIMARY KEY, deviceId VARCHAR(96) NOT NULL, action ENUM('reset','revoke','cleanup') NOT NULL, status ENUM('requested','approved','rejected','executed') NOT NULL DEFAULT 'requested', requestedBy VARCHAR(64) NOT NULL, approvedBy VARCHAR(64) NULL, reason VARCHAR(500) NOT NULL, createdAt BIGINT NOT NULL, approvedAt BIGINT NULL, executedAt BIGINT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settlement_reconciliation (settlementId VARCHAR(96) PRIMARY KEY, safeAmount BIGINT NOT NULL DEFAULT 0, bankTransferAmount BIGINT NOT NULL DEFAULT 0, expectedTotal BIGINT NOT NULL DEFAULT 0, actualTotal BIGINT NOT NULL DEFAULT 0, difference BIGINT NOT NULL DEFAULT 0, sourceUpdatedAt BIGINT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settlement_audit_logs (id BIGINT AUTO_INCREMENT PRIMARY KEY, actorId VARCHAR(64) NOT NULL, action VARCHAR(80) NOT NULL, entityType VARCHAR(50) NOT NULL, entityId VARCHAR(120) NOT NULL, detailJson TEXT NOT NULL, createdAt BIGINT NOT NULL)`,
 ];
 
 const initializeDatabase = async () => {
@@ -75,7 +83,7 @@ app.use((request, response, next) => {
   if (origin) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Token");
     response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   }
   if (request.method === "OPTIONS") return response.sendStatus(204);
@@ -105,13 +113,25 @@ const decodeToken = (token: string): TokenPayload | null => {
 
 declare global { namespace Express { interface Request { deviceId?: string; } } }
 
-const requireDevice = (request: Request, response: Response, next: NextFunction) => {
+const requireAdmin = (request: Request, response: Response, next: NextFunction) => {
+  const supplied = request.header("x-admin-token") ?? request.header("authorization")?.replace(/^Bearer\\s+/i, "");
+  if (!supplied || supplied !== adminApiToken) return response.status(403).json({ message: "관리자 인증이 필요합니다." });
+  next();
+};
+
+const requireDevice = async (request: Request, response: Response, next: NextFunction) => {
   const token = request.header("authorization")?.replace(/^Bearer\s+/i, "");
   const payload = token ? decodeToken(token) : null;
   if (!payload) return response.status(401).json({ message: "유효한 기기 토큰이 필요합니다." });
-  request.deviceId = payload.deviceId;
-  next();
+  try {
+    const [rows] = await pool.query<(RowDataPacket & { id: string })[]>("SELECT id FROM devices WHERE id = ? LIMIT 1", [payload.deviceId]);
+    if (!rows[0]) return response.status(401).json({ message: "초기화되었거나 등록되지 않은 기기입니다. 다시 연결해 주세요." });
+    request.deviceId = payload.deviceId;
+    next();
+  } catch (error) { next(error); }
 };
+
+registerStaffSyncRoutes(app, pool, requireDevice);
 
 const pairingAttempts = new Map<string, { count: number; resetAt: number }>();
 const permitPairing = (request: Request) => {
@@ -145,17 +165,22 @@ app.get("/health", async (_request: Request, response: Response, next: NextFunct
 app.post("/v1/pair", async (request: Request, response: Response, next: NextFunction) => {
   try {
     if (!permitPairing(request)) return response.status(429).json({ message: "연결 코드 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." });
-    const parsed = z.object({ pairCode: z.string().min(12).max(200), deviceName: z.string().min(1).max(120) }).safeParse(request.body);
+    const parsed = z.object({ pairCode: z.string().min(12).max(200), deviceName: z.string().min(1).max(120), deviceFingerprint: z.string().min(8).max(160).optional(), staffId: z.string().max(64).optional() }).safeParse(request.body);
     const submittedCode = parsed.success ? Buffer.from(parsed.data.pairCode) : Buffer.alloc(0);
     const deviceName = parsed.success ? parsed.data.deviceName.trim() : "";
+    const deviceFingerprint = parsed.success ? parsed.data.deviceFingerprint?.trim() || `legacy-${crypto.randomUUID()}` : `legacy-${crypto.randomUUID()}`;
+    const staffId = parsed.success ? parsed.data.staffId?.trim() || null : null;
     const expectedCode = Buffer.from(pairCode);
     const codeMatches = submittedCode.length === expectedCode.length && crypto.timingSafeEqual(submittedCode, expectedCode);
     if (!codeMatches) return response.status(401).json({ message: "연결 코드가 올바르지 않습니다." });
-    const [countRows] = await pool.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM devices");
+    const [countRows] = await pool.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending')");
     if ((countRows[0]?.count ?? 0) >= maxDevices) return response.status(409).json({ message: `등록 가능 기기 수(${maxDevices})에 도달했습니다.` });
+    const [duplicateRows] = await pool.query<(RowDataPacket & { id: string })[]>("SELECT id FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1", [deviceFingerprint]);
+    if (duplicateRows[0]) return response.status(409).json({ message: "이미 등록된 기기 식별자입니다. 기존 기기를 해제한 뒤 다시 연결해 주세요." });
     const deviceId = `device-${crypto.randomUUID()}`;
     const now = Date.now();
     await pool.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)", [deviceId, deviceName, now, now]);
+    await pool.execute("INSERT INTO settlement_devices (id, deviceFingerprint, deviceName, staffId, status, lastSeenAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [deviceId, deviceFingerprint, deviceName, staffId, now, now, now]);
     response.status(201).json({ deviceId, token: encodeToken({ deviceId, expiresAt: now + 1000 * 60 * 60 * 24 * 180 }) });
   } catch (error) { next(error); }
 });
@@ -172,8 +197,65 @@ app.post("/v1/sync/events", requireDevice, async (request: Request, response: Re
       await connection.execute("INSERT INTO settlements (id, business_date, author_id, author_name, author_role, settlement_status, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON)) ON DUPLICATE KEY UPDATE business_date = IF(VALUES(updated_at) >= updated_at, VALUES(business_date), business_date), author_id = IF(VALUES(updated_at) >= updated_at, VALUES(author_id), author_id), author_name = IF(VALUES(updated_at) >= updated_at, VALUES(author_name), author_name), author_role = IF(VALUES(updated_at) >= updated_at, VALUES(author_role), author_role), settlement_status = IF(VALUES(updated_at) >= updated_at, VALUES(settlement_status), settlement_status), payload_json = IF(VALUES(updated_at) >= updated_at, VALUES(payload_json), payload_json), updated_at = GREATEST(updated_at, VALUES(updated_at))", [record.id, record.businessDate, record.createdBy.id, record.createdBy.name, record.createdBy.role, record.status, record.updatedAt, JSON.stringify(record)]);
     }
     await connection.commit();
-    await pool.execute("UPDATE devices SET last_seen_at = ? WHERE id = ?", [Date.now(), request.deviceId!]);
+    const seenAt = Date.now();
+    await pool.execute("UPDATE devices SET last_seen_at = ? WHERE id = ?", [seenAt, request.deviceId!]);
+    await pool.execute("UPDATE settlement_devices SET lastSeenAt = ?, lastSyncAt = ?, updatedAt = ? WHERE id = ?", [seenAt, seenAt, seenAt, request.deviceId!]);
     response.json({ ok: true, accepted: parsed.data.events.map((event) => event.id) });
+  } catch (error) {
+    await connection.rollback();
+    next(error);
+  } finally { connection.release(); }
+});
+
+app.get("/v1/admin/devices", requireAdmin, async (_request: Request, response: Response, next: NextFunction) => {
+  try {
+    const [rows] = await pool.query("SELECT sd.id, sd.deviceFingerprint, sd.deviceName, sd.staffId, sd.status, sd.lastSyncAt, sd.lastSeenAt, sd.createdAt, sd.updatedAt, d.name AS legacyName FROM settlement_devices sd LEFT JOIN devices d ON d.id = sd.id ORDER BY sd.updatedAt DESC");
+    response.json({ devices: rows });
+  } catch (error) { next(error); }
+});
+
+app.get("/v1/admin/device-actions", requireAdmin, async (_request: Request, response: Response, next: NextFunction) => {
+  try { const [rows] = await pool.query("SELECT * FROM settlement_device_action_approvals ORDER BY createdAt DESC LIMIT 200"); response.json({ actions: rows }); } catch (error) { next(error); }
+});
+
+app.post("/v1/admin/device-actions", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
+  const parsed = z.object({ deviceIds: z.array(z.string().min(1).max(96)).min(1).max(50), action: z.enum(["reset", "revoke", "cleanup"]), reason: z.string().min(1).max(500) }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ message: "기기 작업 요청 형식이 올바르지 않습니다." });
+  try {
+    const now = Date.now(); const ids: number[] = [];
+    for (const deviceId of parsed.data.deviceIds) { const [result] = await pool.execute<mysql.ResultSetHeader>("INSERT INTO settlement_device_action_approvals (deviceId, action, status, requestedBy, reason, createdAt) VALUES (?, ?, 'requested', 'admin-console', ?, ?)", [deviceId, parsed.data.action, parsed.data.reason, now]); ids.push(result.insertId); }
+    response.status(201).json({ ok: true, actionIds: ids });
+  } catch (error) { next(error); }
+});
+
+app.post("/v1/admin/device-actions/:id/approve", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
+  try { const [result] = await pool.execute<mysql.ResultSetHeader>("UPDATE settlement_device_action_approvals SET status='approved', approvedBy='admin-console', approvedAt=? WHERE id=? AND status='requested'", [Date.now(), request.params.id]); if (!result.affectedRows) return response.status(409).json({ message: "승인할 수 없는 작업 상태입니다." }); response.json({ ok: true }); } catch (error) { next(error); }
+});
+
+app.post("/v1/admin/device-actions/:id/execute", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query<Array<RowDataPacket & { deviceId: string; action: string }>>("SELECT deviceId, action FROM settlement_device_action_approvals WHERE id=? AND status='approved' LIMIT 1", [request.params.id]);
+    const action = rows[0]; if (!action) return response.status(409).json({ message: "승인 완료된 작업만 실행할 수 있습니다." });
+    await connection.beginTransaction();
+    if (action.action === "revoke" || action.action === "cleanup") { await connection.execute("UPDATE settlement_devices SET status='revoked', updatedAt=? WHERE id=?", [Date.now(), action.deviceId]); await connection.execute("DELETE FROM devices WHERE id=?", [action.deviceId]); }
+    else await connection.execute("UPDATE settlement_devices SET status='reset_pending', lastSyncAt=NULL, updatedAt=? WHERE id=?", [Date.now(), action.deviceId]);
+    await connection.execute("UPDATE settlement_device_action_approvals SET status='executed', executedAt=? WHERE id=?", [Date.now(), request.params.id]);
+    await connection.commit(); response.json({ ok: true, deviceId: action.deviceId, action: action.action });
+  } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
+});
+
+app.post("/v1/test-reset", requireDevice, async (request: Request, response: Response, next: NextFunction) => {
+  const parsed = z.object({ confirm: z.literal("RESET_TEST_WORKSPACE") }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ message: "테스트 초기화 확인값이 올바르지 않습니다." });
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [eventResult] = await connection.execute<mysql.ResultSetHeader>("DELETE FROM settlement_events");
+    const [settlementResult] = await connection.execute<mysql.ResultSetHeader>("DELETE FROM settlements");
+    await connection.execute("DELETE FROM devices");
+    await connection.commit();
+    response.json({ ok: true, deletedEvents: eventResult.affectedRows, deletedSettlements: settlementResult.affectedRows });
   } catch (error) {
     await connection.rollback();
     next(error);
