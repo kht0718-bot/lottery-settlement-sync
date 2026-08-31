@@ -173,15 +173,24 @@ app.post("/v1/pair", async (request: Request, response: Response, next: NextFunc
     const expectedCode = Buffer.from(pairCode);
     const codeMatches = submittedCode.length === expectedCode.length && crypto.timingSafeEqual(submittedCode, expectedCode);
     if (!codeMatches) return response.status(401).json({ message: "연결 코드가 올바르지 않습니다." });
-    const [countRows] = await pool.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending')");
-    if ((countRows[0]?.count ?? 0) >= maxDevices) return response.status(409).json({ message: `등록 가능 기기 수(${maxDevices})에 도달했습니다.` });
-    const [duplicateRows] = await pool.query<(RowDataPacket & { id: string })[]>("SELECT id FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1", [deviceFingerprint]);
-    if (duplicateRows[0]) return response.status(409).json({ message: "이미 등록된 기기 식별자입니다. 기존 기기를 해제한 뒤 다시 연결해 주세요." });
-    const deviceId = `device-${crypto.randomUUID()}`;
+    // 동일 핸드폰의 앱 재설치·APK 교체는 신규 기기 등록이 아니라 재연결로 처리합니다.
+    // 연결 코드 검증을 통과한 뒤 기존 deviceId와 정산 데이터는 유지하고 토큰만 재발급합니다.
+    const [duplicateRows] = await pool.query<(RowDataPacket & { id: string; status: string })[]>("SELECT id, status FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1", [deviceFingerprint]);
+    const existingDevice = duplicateRows[0];
+    if (!existingDevice) {
+      const [countRows] = await pool.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending')");
+      if ((countRows[0]?.count ?? 0) >= maxDevices) return response.status(409).json({ message: `등록 가능 기기 수(${maxDevices})에 도달했습니다.` });
+    }
+    const deviceId = existingDevice?.id ?? `device-${crypto.randomUUID()}`;
     const now = Date.now();
-    await pool.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)", [deviceId, deviceName, now, now]);
-    await pool.execute("INSERT INTO settlement_devices (id, deviceFingerprint, deviceName, staffId, status, lastSeenAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [deviceId, deviceFingerprint, deviceName, staffId, now, now, now]);
-    response.status(201).json({ deviceId, token: encodeToken({ deviceId, expiresAt: now + 1000 * 60 * 60 * 24 * 180 }) });
+    if (existingDevice) {
+      await pool.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), last_seen_at=VALUES(last_seen_at)", [deviceId, deviceName, now, now]);
+      await pool.execute("UPDATE settlement_devices SET deviceName=?, staffId=?, status='active', lastSeenAt=?, updatedAt=? WHERE id=?", [deviceName, staffId, now, now, deviceId]);
+    } else {
+      await pool.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)", [deviceId, deviceName, now, now]);
+      await pool.execute("INSERT INTO settlement_devices (id, deviceFingerprint, deviceName, staffId, status, lastSeenAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [deviceId, deviceFingerprint, deviceName, staffId, now, now, now]);
+    }
+    response.status(existingDevice ? 200 : 201).json({ deviceId, reconnected: Boolean(existingDevice), token: encodeToken({ deviceId, expiresAt: now + 1000 * 60 * 60 * 24 * 180 }) });
   } catch (error) { next(error); }
 });
 
