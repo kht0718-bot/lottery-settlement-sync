@@ -18,15 +18,17 @@ if (pairCode.length < 12) throw new Error("PAIR_CODE는 12자 이상이어야 �
 if (tokenSecret.length < 32) throw new Error("TOKEN_SECRET은 32자 이상이어야 합니다.");
 
 const port = Number(process.env.PORT ?? 3000);
-const maxDevices = Math.max(1, Number(process.env.MAX_DEVICES ?? 5));
-const adminApiToken = process.env.ADMIN_API_TOKEN ?? pairCode;
+const maxDevices = 10; // 활성 등록 기기는 정확히 10대로 고정
+const adminApiToken = required("ADMIN_API_TOKEN");
+const configuredConnectionLimit = Number(process.env.DB_CONNECTION_LIMIT ?? 10);
+const dbConnectionLimit = Number.isFinite(configuredConnectionLimit) ? Math.min(50, Math.max(1, Math.floor(configuredConnectionLimit))) : 10;
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const connectionUrl = new URL(databaseUrl);
 connectionUrl.searchParams.delete("ssl-mode");
 const databaseCa = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
 const databaseTls = databaseCa ? { ca: databaseCa, rejectUnauthorized: true, servername: connectionUrl.hostname } : { rejectUnauthorized: false, servername: connectionUrl.hostname };
 if (!databaseCa) console.warn("DATABASE_CA_CERT가 없어 Aiven TLS 암호화 연결을 CA 검증 없이 사용합니다.");
-const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: databaseTls, waitForConnections: true, connectionLimit: 5 });
+const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: databaseTls, waitForConnections: true, connectionLimit: dbConnectionLimit });
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS devices (
@@ -67,6 +69,19 @@ const schemaStatements = [
 const initializeDatabase = async () => {
   for (const statement of schemaStatements) await pool.query(statement);
   console.log("lottery sync API database schema ready");
+};
+
+const tokenOnlyDisconnectResult = (deviceId: string) => ({ ok: true as const, deviceId, tokenRevoked: true as const, settlementDataPreserved: true as const });
+
+const initializeDatabaseWithRetry = async () => {
+  const delays = [0, 2000, 5000, 10000, 20000, 30000];
+  let lastError: unknown;
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]) await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    try { await initializeDatabase(); return; }
+    catch (error) { lastError = error; console.error("[DB_INIT_RETRY]", attempt + 1, error instanceof Error ? error.message : String(error)); }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || "database initialization failed"));
 };
 
 const app = express();
@@ -158,9 +173,8 @@ const eventSchema = z.object({
   }).passthrough(),
 });
 
-app.get("/health", async (_request: Request, response: Response, next: NextFunction) => {
-  try { await pool.query("SELECT 1"); response.json({ ok: true }); } catch (error) { next(error); }
-});
+app.get("/health", (_request: Request, response: Response) => response.json({ ok: true, service: "lottery-settlement-sync" }));
+app.get("/ready", async (_request: Request, response: Response) => { try { await pool.query("SELECT 1"); response.json({ ok: true, database: "ready" }); } catch { response.status(503).json({ ok: false, database: "unavailable" }); } });
 
 app.post("/v1/pair", async (request: Request, response: Response, next: NextFunction) => {
   try {
@@ -223,6 +237,40 @@ app.get("/v1/admin/devices", requireAdmin, async (_request: Request, response: R
   } catch (error) { next(error); }
 });
 
+app.post("/v1/admin/devices/:deviceId/disconnect", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
+  const parsed = z.object({ reason: z.string().min(1).max(500).default("관리자 화면에서 연결 해제") }).safeParse(request.body);
+  const deviceId = request.params.deviceId;
+  if (!parsed.success) return response.status(400).json({ code: "INVALID_DISCONNECT_REQUEST", message: "연결 해제 사유 형식이 올바르지 않습니다." });
+  const connection = await pool.getConnection();
+  try {
+    const now = Date.now(); await connection.beginTransaction();
+    const [rows] = await connection.query<Array<RowDataPacket & { status: string }>>("SELECT status FROM settlement_devices WHERE id=? LIMIT 1 FOR UPDATE", [deviceId]);
+    const device = rows[0];
+    if (!device) { await connection.rollback(); return response.status(404).json({ code: "DEVICE_NOT_FOUND", message: "등록된 기기를 찾지 못했습니다." }); }
+    if (device.status === "revoked") { await connection.rollback(); return response.json({ ...tokenOnlyDisconnectResult(deviceId), alreadyRevoked: true }); }
+    await connection.execute("UPDATE settlement_devices SET status='revoked', updatedAt=? WHERE id=?", [now, deviceId]);
+    await connection.execute("DELETE FROM devices WHERE id=?", [deviceId]);
+    await connection.execute("INSERT INTO settlement_audit_logs (actorId, action, entityType, entityId, detailJson, createdAt) VALUES (?, ?, ?, ?, ?, ?)", ["admin-console", "device_token_revoked", "device", deviceId, JSON.stringify({ reason: parsed.data.reason, settlementDataPreserved: true }), now]);
+    await connection.commit(); response.json(tokenOnlyDisconnectResult(deviceId));
+  } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
+});
+
+app.post("/v1/admin/devices/:deviceId/delete-registration", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
+  const parsed = z.object({ reason: z.string().min(1).max(500).default("관리자 화면에서 등록 삭제") }).safeParse(request.body);
+  const deviceId = request.params.deviceId;
+  if (!parsed.success) return response.status(400).json({ code: "INVALID_DELETE_REQUEST", message: "등록 삭제 사유 형식이 올바르지 않습니다." });
+  const connection = await pool.getConnection();
+  try {
+    const now = Date.now(); await connection.beginTransaction();
+    const [rows] = await connection.query<Array<RowDataPacket & { id: string }>>("SELECT id FROM settlement_devices WHERE id=? LIMIT 1 FOR UPDATE", [deviceId]);
+    if (!rows[0]) { await connection.rollback(); return response.status(404).json({ code: "DEVICE_NOT_FOUND", message: "등록된 기기를 찾지 못했습니다." }); }
+    // 정산·제출·승인·반려·증빙 이력은 절대 삭제하지 않고 기기 등록 두 테이블만 삭제한다.
+    await connection.execute("DELETE FROM devices WHERE id=?", [deviceId]);
+    await connection.execute("DELETE FROM settlement_devices WHERE id=?", [deviceId]);
+    await connection.execute("INSERT INTO settlement_audit_logs (actorId, action, entityType, entityId, detailJson, createdAt) VALUES (?, ?, ?, ?, ?, ?)", ["admin-console", "device_registration_deleted", "device", deviceId, JSON.stringify({ reason: parsed.data.reason, settlementDataPreserved: true }), now]);
+    await connection.commit(); response.json({ ok: true, deviceId, registrationDeleted: true, settlementDataPreserved: true });
+  } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
+});
 app.get("/v1/admin/device-actions", requireAdmin, async (_request: Request, response: Response, next: NextFunction) => {
   try { const [rows] = await pool.query("SELECT * FROM settlement_device_action_approvals ORDER BY createdAt DESC LIMIT 200"); response.json({ actions: rows }); } catch (error) { next(error); }
 });
@@ -284,8 +332,8 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 });
 process.on("unhandledRejection", (error) => process.stderr.write(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`));
 process.on("uncaughtException", (error) => process.stderr.write(`uncaught exception: ${error.stack ?? error.message}\n`));
-void initializeDatabase()
-  .then(() => app.listen(port, () => console.log(`lottery sync API started on port ${port}`)))
+void initializeDatabaseWithRetry()
+  .then(() => app.listen(port, () => console.log(`lottery sync API started on port ${port} · maxDevices=${maxDevices} · dbConnections=${dbConnectionLimit}`)))
   .catch(async (error) => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);
     process.stderr.write(`lottery sync API database initialization failed: ${message}\n`);
