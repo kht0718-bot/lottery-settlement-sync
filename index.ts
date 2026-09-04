@@ -86,7 +86,7 @@ const initializeDatabaseWithRetry = async () => {
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 app.use((request, response, next) => {
   response.setHeader("X-Content-Type-Options", "nosniff");
@@ -179,6 +179,7 @@ app.get("/ready", async (_request: Request, response: Response) => { try { await
 app.post("/v1/pair", async (request: Request, response: Response, next: NextFunction) => {
   try {
     if (!permitPairing(request)) return response.status(429).json({ message: "연결 코드 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." });
+    console.info("[PAIR_REQUEST]", { contentLength: request.header("content-length") ?? null, keys: request.body && typeof request.body === "object" ? Object.keys(request.body).sort() : [] });
     const parsed = z.object({ pairCode: z.string().min(12).max(200), deviceName: z.string().min(1).max(120), deviceFingerprint: z.string().min(8).max(160).optional(), staffId: z.string().max(64).optional() }).safeParse(request.body);
     const submittedCode = parsed.success ? Buffer.from(parsed.data.pairCode) : Buffer.alloc(0);
     const deviceName = parsed.success ? parsed.data.deviceName.trim() : "";
@@ -189,22 +190,35 @@ app.post("/v1/pair", async (request: Request, response: Response, next: NextFunc
     if (!codeMatches) return response.status(401).json({ message: "연결 코드가 올바르지 않습니다." });
     // 동일 핸드폰의 앱 재설치·APK 교체는 신규 기기 등록이 아니라 재연결로 처리합니다.
     // 연결 코드 검증을 통과한 뒤 기존 deviceId와 정산 데이터는 유지하고 토큰만 재발급합니다.
-    const [duplicateRows] = await pool.query<(RowDataPacket & { id: string; status: string })[]>("SELECT id, status FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1", [deviceFingerprint]);
-    const existingDevice = duplicateRows[0];
-    if (!existingDevice) {
-      const [countRows] = await pool.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending')");
-      if ((countRows[0]?.count ?? 0) >= maxDevices) return response.status(409).json({ message: `등록 가능 기기 수(${maxDevices})에 도달했습니다.` });
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [duplicateRows] = await connection.query<(RowDataPacket & { id: string; status: string })[]>("SELECT id, status FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1 FOR UPDATE", [deviceFingerprint]);
+      const existingDevice = duplicateRows[0];
+      if (!existingDevice) {
+        const [countRows] = await connection.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending') FOR UPDATE");
+        if ((countRows[0]?.count ?? 0) >= maxDevices) {
+          await connection.rollback();
+          return response.status(409).json({ message: `등록 가능 기기 수(${maxDevices})에 도달했습니다.` });
+        }
+      }
+      const deviceId = existingDevice?.id ?? `device-${crypto.randomUUID()}`;
+      const now = Date.now();
+      if (existingDevice) {
+        await connection.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), last_seen_at=VALUES(last_seen_at)", [deviceId, deviceName, now, now]);
+        await connection.execute("UPDATE settlement_devices SET deviceName=?, staffId=?, status='active', lastSeenAt=?, updatedAt=? WHERE id=?", [deviceName, staffId, now, now, deviceId]);
+      } else {
+        await connection.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)", [deviceId, deviceName, now, now]);
+        await connection.execute("INSERT INTO settlement_devices (id, deviceFingerprint, deviceName, staffId, status, lastSeenAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [deviceId, deviceFingerprint, deviceName, staffId, now, now, now]);
+      }
+      await connection.commit();
+      response.status(existingDevice ? 200 : 201).json({ deviceId, reconnected: Boolean(existingDevice), token: encodeToken({ deviceId, expiresAt: now + 1000 * 60 * 60 * 24 * 180 }) });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-    const deviceId = existingDevice?.id ?? `device-${crypto.randomUUID()}`;
-    const now = Date.now();
-    if (existingDevice) {
-      await pool.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), last_seen_at=VALUES(last_seen_at)", [deviceId, deviceName, now, now]);
-      await pool.execute("UPDATE settlement_devices SET deviceName=?, staffId=?, status='active', lastSeenAt=?, updatedAt=? WHERE id=?", [deviceName, staffId, now, now, deviceId]);
-    } else {
-      await pool.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)", [deviceId, deviceName, now, now]);
-      await pool.execute("INSERT INTO settlement_devices (id, deviceFingerprint, deviceName, staffId, status, lastSeenAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [deviceId, deviceFingerprint, deviceName, staffId, now, now, now]);
-    }
-    response.status(existingDevice ? 200 : 201).json({ deviceId, reconnected: Boolean(existingDevice), token: encodeToken({ deviceId, expiresAt: now + 1000 * 60 * 60 * 24 * 180 }) });
   } catch (error) { next(error); }
 });
 
@@ -328,6 +342,8 @@ app.get("/v1/sync/changes", requireDevice, async (_request: Request, response: R
 
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
   console.error(error);
+  const status = typeof error === "object" && error !== null && "status" in error ? Number((error as { status?: unknown }).status) : 500;
+  if (status === 413) return response.status(413).json({ code: "REQUEST_TOO_LARGE", message: "전송 데이터가 너무 큽니다. 증빙사진은 최대 4장으로 줄여 다시 시도해 주세요." });
   response.status(500).json({ message: "서버 처리 중 오류가 발생했습니다." });
 });
 process.on("unhandledRejection", (error) => process.stderr.write(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`));
