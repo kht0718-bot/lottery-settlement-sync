@@ -68,6 +68,12 @@ const schemaStatements = [
 
 const initializeDatabase = async () => {
   for (const statement of schemaStatements) await pool.query(statement);
+  // 기존 테이블은 CREATE TABLE IF NOT EXISTS로 인덱스가 자동 추가되지 않으므로,
+  // 대량 동기화 정렬 전에 updated_at 인덱스를 실제로 보장한다.
+  const [indexRows] = await pool.query<(RowDataPacket & { count: number })[]>(
+    "SELECT COUNT(*) AS count FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'settlements' AND index_name = 'idx_settlements_updated'"
+  );
+  if (!indexRows[0]?.count) await pool.query("CREATE INDEX idx_settlements_updated ON settlements (updated_at)");
   console.log("lottery sync API database schema ready");
 };
 
@@ -335,7 +341,11 @@ app.post("/v1/test-reset", requireDevice, async (request: Request, response: Res
 
 app.get("/v1/sync/changes", requireDevice, async (_request: Request, response: Response, next: NextFunction) => {
   try {
-    const [rows] = await pool.query<(RowDataPacket & { payload_json: unknown })[]>("SELECT payload_json FROM settlements ORDER BY updated_at DESC LIMIT 500");
+    // 먼저 updated_at 인덱스로 ID 500개만 결정한 뒤 payload를 가져온다.
+    // 대용량 JSON을 정렬 버퍼에 올리지 않아 Aiven의 sort-memory 오류를 피한다.
+    const [rows] = await pool.query<(RowDataPacket & { payload_json: unknown })[]>(
+      "SELECT s.payload_json FROM settlements s JOIN (SELECT id, updated_at FROM settlements ORDER BY updated_at DESC LIMIT 500) latest ON latest.id = s.id ORDER BY latest.updated_at DESC"
+    );
     response.json({ settlements: rows.map((row) => typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : row.payload_json) });
   } catch (error) { next(error); }
 });
