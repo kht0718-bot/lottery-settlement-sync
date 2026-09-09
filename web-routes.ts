@@ -38,6 +38,7 @@ type WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: st
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
 const hashToken = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
+const safeTokenEqual = (left: string, right: string) => crypto.timingSafeEqual(Buffer.from(hashToken(left)), Buffer.from(hashToken(right)));
 
 const hashPassword = (password: string) => {
   const salt = crypto.randomBytes(16);
@@ -88,7 +89,7 @@ export function registerWebRoutes(
   app.post("/v1/web/bootstrap", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const suppliedToken = request.header("x-admin-token") ?? "";
-      if (!crypto.timingSafeEqual(Buffer.from(suppliedToken.padEnd(options.adminApiToken.length, "\0")), Buffer.from(options.adminApiToken)) || suppliedToken.length !== options.adminApiToken.length) {
+      if (!safeTokenEqual(suppliedToken, options.adminApiToken)) {
         return response.status(401).json({ code: "ADMIN_AUTH_REQUIRED", message: "관리자 설정 권한이 필요합니다." });
       }
       const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users");
