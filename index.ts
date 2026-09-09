@@ -159,7 +159,6 @@ const requireDevice = async (request: Request, response: Response, next: NextFun
 
 registerStaffSyncRoutes(app, pool, requireDevice);
 
-const webEnabled = String(process.env.WEB_ENABLED ?? "false").toLowerCase() === "true";
 registerWebRoutes(app, pool, { webEnabled });
 
 const pairingAttempts = new Map<string, { count: number; resetAt: number }>();
