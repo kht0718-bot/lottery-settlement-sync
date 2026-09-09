@@ -68,8 +68,10 @@ const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS settlement_device_action_approvals (id BIGINT AUTO_INCREMENT PRIMARY KEY, deviceId VARCHAR(96) NOT NULL, action ENUM('reset','revoke','cleanup') NOT NULL, status ENUM('requested','approved','rejected','executed') NOT NULL DEFAULT 'requested', requestedBy VARCHAR(64) NOT NULL, approvedBy VARCHAR(64) NULL, reason VARCHAR(500) NOT NULL, createdAt BIGINT NOT NULL, approvedAt BIGINT NULL, executedAt BIGINT NULL)`,
   `CREATE TABLE IF NOT EXISTS settlement_reconciliation (settlementId VARCHAR(96) PRIMARY KEY, safeAmount BIGINT NOT NULL DEFAULT 0, bankTransferAmount BIGINT NOT NULL DEFAULT 0, expectedTotal BIGINT NOT NULL DEFAULT 0, actualTotal BIGINT NOT NULL DEFAULT 0, difference BIGINT NOT NULL DEFAULT 0, sourceUpdatedAt BIGINT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS settlement_audit_logs (id BIGINT AUTO_INCREMENT PRIMARY KEY, actorId VARCHAR(64) NOT NULL, action VARCHAR(80) NOT NULL, entityType VARCHAR(50) NOT NULL, entityId VARCHAR(120) NOT NULL, detailJson TEXT NOT NULL, createdAt BIGINT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS web_users (id VARCHAR(64) PRIMARY KEY, staffId VARCHAR(64) NOT NULL UNIQUE, username VARCHAR(120) NOT NULL UNIQUE, passwordHash VARCHAR(255) NOT NULL, role ENUM('admin','employee') NOT NULL, active TINYINT(1) NOT NULL DEFAULT 1, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL, INDEX idx_web_users_staff (staffId))`,
-  `CREATE TABLE IF NOT EXISTS web_sessions (id VARCHAR(96) PRIMARY KEY, userId VARCHAR(64) NOT NULL, tokenHash CHAR(64) NOT NULL UNIQUE, expiresAt BIGINT NOT NULL, createdAt BIGINT NOT NULL, lastSeenAt BIGINT NOT NULL, INDEX idx_web_sessions_user (userId), INDEX idx_web_sessions_expires (expiresAt))`,
+  ...(webEnabled ? [
+    `CREATE TABLE IF NOT EXISTS web_users (id VARCHAR(64) PRIMARY KEY, staffId VARCHAR(64) NOT NULL UNIQUE, username VARCHAR(120) NOT NULL UNIQUE, passwordHash VARCHAR(255) NOT NULL, role ENUM('admin','employee') NOT NULL, active TINYINT(1) NOT NULL DEFAULT 1, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL, INDEX idx_web_users_staff (staffId))`,
+    `CREATE TABLE IF NOT EXISTS web_sessions (id VARCHAR(96) PRIMARY KEY, userId VARCHAR(64) NOT NULL, tokenHash CHAR(64) NOT NULL UNIQUE, expiresAt BIGINT NOT NULL, createdAt BIGINT NOT NULL, lastSeenAt BIGINT NOT NULL, INDEX idx_web_sessions_user (userId), INDEX idx_web_sessions_expires (expiresAt))`,
+  ] : []),
 ];
 
 const initializeDatabase = async () => {
