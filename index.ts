@@ -162,7 +162,7 @@ const requireDevice = async (request: Request, response: Response, next: NextFun
 
 registerStaffSyncRoutes(app, pool, requireDevice);
 
-registerWebRoutes(app, pool, { webEnabled });
+registerWebRoutes(app, pool, { webEnabled, adminApiToken });
 
 const pairingAttempts = new Map<string, { count: number; resetAt: number }>();
 const permitPairing = (request: Request) => {
