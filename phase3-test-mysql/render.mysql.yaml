@@ -2,7 +2,7 @@ services:
   - type: pserv
     name: lottery-settlement-sync-web-phase3-mysql
     runtime: docker
-    plan: free
+    plan: starter
     repo: https://github.com/kht0718-bot/lottery-settlement-sync
     branch: web-phase3-readonly
     dockerfilePath: ./phase3-test-mysql/Dockerfile
