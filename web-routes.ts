@@ -79,12 +79,10 @@ export function registerWebRoutes(
   };
 
   app.get("/v1/web/status", (_request: Request, response: Response) => {
-    if (!options.webEnabled) return disabled(response);
     response.json({ ok: true, enabled: true });
   });
 
   app.post("/v1/web/auth/login", async (request: Request, response: Response, next: NextFunction) => {
-    if (!options.webEnabled) return disabled(response);
     try {
       const username = typeof request.body?.username === "string" ? request.body.username.trim() : "";
       const password = typeof request.body?.password === "string" ? request.body.password : "";
