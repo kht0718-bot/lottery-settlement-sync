@@ -28,6 +28,7 @@ const dbConnectionLimit = Number.isFinite(configuredConnectionLimit) ? Math.min(
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const connectionUrl = new URL(databaseUrl);
 connectionUrl.searchParams.delete("ssl-mode");
+connectionUrl.searchParams.delete("sslmode");
 const databaseCa = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
 const databaseTls = databaseCa ? { ca: databaseCa, rejectUnauthorized: true, servername: connectionUrl.hostname } : { rejectUnauthorized: false, servername: connectionUrl.hostname };
 if (!databaseCa) console.warn("DATABASE_CA_CERT가 없어 Aiven TLS 암호화 연결을 CA 검증 없이 사용합니다.");
