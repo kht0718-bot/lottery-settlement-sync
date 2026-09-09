@@ -33,7 +33,7 @@ type SettlementRow = {
 };
 
 type WebRequest = Request & { webUser?: Omit<WebSessionRow, "expiresAt"> };
-type WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void };
+type WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void; all: (path: string, ...handlers: any[]) => void };
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
@@ -56,8 +56,14 @@ export function registerWebRoutes(
   pool: mysql.Pool,
   options: { webEnabled: boolean }
 ) {
+  if (!options.webEnabled) {
+    app.all("/v1/web/*", (_request: Request, response: Response) => {
+      disabled(response);
+    });
+    return;
+  }
+
   const requireWeb = (request: WebRequest, response: Response, next: NextFunction) => {
-    if (!options.webEnabled) return disabled(response);
     const raw = request.header("authorization")?.replace(/^Bearer\s+/i, "");
     if (!raw) return response.status(401).json({ code: "WEB_AUTH_REQUIRED", message: "웹 로그인이 필요합니다." });
     const tokenHash = hashToken(raw);
