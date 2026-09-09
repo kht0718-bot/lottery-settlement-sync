@@ -32,7 +32,7 @@ type SettlementRow = {
   payload_json: unknown;
 };
 
-type WebRequest = Request & { webUser?: Omit<WebSessionRow, "expiresAt"> };
+type WebRequest = Request & { webUser?: Omit<WebSessionRow, "expiresAt"> };\ntype WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void };
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
@@ -51,7 +51,7 @@ const verifyPassword = (password: string, stored: string) => {
 const disabled = (response: Response) => response.status(503).json({ code: "WEB_DISABLED", message: "웹 기능이 아직 활성화되지 않았습니다." });
 
 export function registerWebRoutes(
-  app: { get: Function; post: Function },
+  app: WebApp,
   pool: mysql.Pool,
   options: { webEnabled: boolean }
 ) {
