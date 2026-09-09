@@ -12,6 +12,8 @@ const required = (name: string) => {
   return value;
 };
 
+const webEnabled = String(process.env.WEB_ENABLED ?? "false").toLowerCase() === "true";
+
 const databaseUrl = required("DATABASE_URL");
 const pairCode = required("PAIR_CODE_V2");
 const tokenSecret = required("TOKEN_SECRET");
