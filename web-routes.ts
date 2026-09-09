@@ -98,6 +98,9 @@ export function registerWebRoutes(
       const username = typeof request.body?.username === "string" ? request.body.username.trim() : "";
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       if (!staffId || !username || password.length < 8) return response.status(400).json({ code: "INVALID_BOOTSTRAP", message: "staffId, username, 8자 이상 password가 필요합니다." });
+      const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
+      const staff = staffRows[0];
+      if (!staff || staff.status !== "active" || staff.role !== "admin") return response.status(400).json({ code: "INVALID_BOOTSTRAP_STAFF", message: "활성 관리자 직원만 최초 웹 관리자로 설정할 수 있습니다." });
       const now = Date.now();
       await pool.execute(
         "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
@@ -119,6 +122,11 @@ export function registerWebRoutes(
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
+      const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=1");
+      if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 사용자는 관리자 포함 최대 5명입니다." });
+      const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
+      const staff = staffRows[0];
+      if (!staff || staff.status !== "active" || staff.role !== role) return response.status(400).json({ code: "INVALID_STAFF", message: "활성 직원 정보와 역할이 일치해야 합니다." });
       const now = Date.now();
       const id = crypto.randomUUID();
       await pool.execute(
@@ -167,6 +175,71 @@ export function registerWebRoutes(
       response.json({ ok: true });
     } catch (error) { next(error); }
   });
+
+  app.post("/v1/web/settlements", requireWeb, async (request: WebRequest, response: Response, next: NextFunction) => {
+    const user = request.webUser!;
+    const payload = request.body?.payload;
+    if (!payload || typeof payload !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "payload가 필요합니다." });
+    const id = typeof (payload as any).id === "string" ? (payload as any).id.trim() : "";
+    const businessDate = typeof (payload as any).businessDate === "string" ? (payload as any).businessDate : "";
+    if (!id || id.length > 96 || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "정산 ID 또는 영업일 형식이 올바르지 않습니다." });
+    const createdBy = (payload as any).createdBy;
+    if (!createdBy || typeof createdBy !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy가 필요합니다." });
+    if (user.role === "employee" && createdBy.id !== user.staffId) return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 본인 정산만 작성할 수 있습니다." });
+    const status = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
+    const updatedAt = Number((payload as any).updatedAt);
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "updatedAt이 필요합니다." });
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [existingRows] = await connection.query<SettlementRow[]>("SELECT id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json FROM settlements WHERE id=? LIMIT 1 FOR UPDATE", [id]);
+      const existing = existingRows[0];
+      if (existing && user.role === "employee" && existing.author_id !== user.staffId) {
+        await connection.rollback();
+        return response.status(403).json({ code: "WEB_SETTLEMENT_FORBIDDEN", message: "다른 직원의 정산은 수정할 수 없습니다." });
+      }
+      if (existing && user.role === "employee" && !["draft","submitted","rejected"].includes(existing.settlement_status)) {
+        await connection.rollback();
+        return response.status(409).json({ code: "WEB_SETTLEMENT_LOCKED", message: "승인 완료된 정산은 직원이 수정할 수 없습니다." });
+      }
+      const finalAuthorId = existing?.author_id ?? user.staffId;
+      const finalAuthorName = existing?.author_name ?? (typeof createdBy.name === "string" ? createdBy.name : user.username);
+      const finalAuthorRole = existing?.author_role ?? user.role;
+      (payload as any).createdBy = { id: finalAuthorId, name: finalAuthorName, role: finalAuthorRole };
+      await connection.execute(
+        "INSERT INTO settlements (id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json) VALUES (?,?,?,?,?,?,?,CAST(? AS JSON)) ON DUPLICATE KEY UPDATE business_date=VALUES(business_date), author_name=VALUES(author_name), settlement_status=VALUES(settlement_status), updated_at=VALUES(updated_at), payload_json=VALUES(payload_json)",
+        [id, businessDate, finalAuthorId, finalAuthorName, finalAuthorRole, status, updatedAt, JSON.stringify(payload)]
+      );
+      await connection.commit();
+      response.status(existing ? 200 : 201).json({ ok: true, id });
+    } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
+  });
+
+  const transitionSettlement = (nextStatus: string) => async (request: WebRequest, response: Response, next: NextFunction) => {
+    const user = request.webUser!;
+    if (user.role !== "admin") return response.status(403).json({ code: "WEB_ADMIN_REQUIRED", message: "관리자 권한이 필요합니다." });
+    const id = request.params.id;
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.query<SettlementRow[]>("SELECT id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json FROM settlements WHERE id=? LIMIT 1 FOR UPDATE", [id]);
+      const row = rows[0];
+      if (!row) { await connection.rollback(); return response.status(404).json({ code: "SETTLEMENT_NOT_FOUND", message: "정산을 찾을 수 없습니다." }); }
+      const payload = typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : row.payload_json as any;
+      const now = Date.now();
+      payload.status = nextStatus;
+      payload.updatedAt = now;
+      const events = Array.isArray(payload.approvalEvents) ? payload.approvalEvents : [];
+      events.push({ status: nextStatus, actor: { id: user.staffId, name: user.username, role: "admin" }, createdAt: now });
+      payload.approvalEvents = events;
+      await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=CAST(? AS JSON) WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
+      await connection.commit();
+      response.json({ ok: true, id, status: nextStatus });
+    } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
+  };
+  app.post("/v1/web/settlements/:id/approve", requireWeb, transitionSettlement("manager_approved"));
+  app.post("/v1/web/settlements/:id/reject", requireWeb, transitionSettlement("rejected"));
+
 
   app.get("/v1/web/settlements", requireWeb, async (request: WebRequest, response: Response, next: NextFunction) => {
     try {
