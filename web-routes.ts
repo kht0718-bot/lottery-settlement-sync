@@ -39,6 +39,12 @@ const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
 const hashToken = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 
+const hashPassword = (password: string) => {
+  const salt = crypto.randomBytes(16);
+  const derived = crypto.scryptSync(password, salt, 64);
+  return `scrypt${salt.toString("base64url")}${derived.toString("base64url")}`;
+};
+
 const verifyPassword = (password: string, stored: string) => {
   const parts = stored.split("$");
   if (parts.length !== 3 || parts[0] !== "scrypt") return false;
@@ -54,7 +60,7 @@ const disabled = (response: Response) => response.status(503).json({ code: "WEB_
 export function registerWebRoutes(
   app: WebApp,
   pool: mysql.Pool,
-  options: { webEnabled: boolean }
+  options: { webEnabled: boolean; adminApiToken: string }
 ) {
   if (!options.webEnabled) {
     app.all("/v1/web/*", (_request: Request, response: Response) => {
@@ -77,6 +83,50 @@ export function registerWebRoutes(
       return pool.execute("UPDATE web_sessions SET lastSeenAt=? WHERE id=?", [Date.now(), session.id]).then(() => next());
     }).catch(next);
   };
+
+
+  app.post("/v1/web/bootstrap", async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const suppliedToken = request.header("x-admin-token") ?? "";
+      if (!crypto.timingSafeEqual(Buffer.from(suppliedToken.padEnd(options.adminApiToken.length, "\0")), Buffer.from(options.adminApiToken)) || suppliedToken.length !== options.adminApiToken.length) {
+        return response.status(401).json({ code: "ADMIN_AUTH_REQUIRED", message: "관리자 설정 권한이 필요합니다." });
+      }
+      const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users");
+      if (Number(countRows[0]?.count ?? 0) > 0) return response.status(409).json({ code: "WEB_ALREADY_INITIALIZED", message: "웹 사용자가 이미 초기화되었습니다." });
+      const staffId = typeof request.body?.staffId === "string" ? request.body.staffId.trim() : "";
+      const username = typeof request.body?.username === "string" ? request.body.username.trim() : "";
+      const password = typeof request.body?.password === "string" ? request.body.password : "";
+      if (!staffId || !username || password.length < 8) return response.status(400).json({ code: "INVALID_BOOTSTRAP", message: "staffId, username, 8자 이상 password가 필요합니다." });
+      const now = Date.now();
+      await pool.execute(
+        "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
+        [crypto.randomUUID(), staffId, username, hashPassword(password), "admin", 1, now, now]
+      );
+      response.status(201).json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
+  const requireAdmin = (request: WebRequest, response: Response, next: NextFunction) => {
+    if (request.webUser?.role !== "admin") return response.status(403).json({ code: "WEB_ADMIN_REQUIRED", message: "관리자 권한이 필요합니다." });
+    next();
+  };
+
+  app.post("/v1/web/admin/users", requireWeb, requireAdmin, async (request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      const staffId = typeof request.body?.staffId === "string" ? request.body.staffId.trim() : "";
+      const username = typeof request.body?.username === "string" ? request.body.username.trim() : "";
+      const password = typeof request.body?.password === "string" ? request.body.password : "";
+      const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
+      if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
+      const now = Date.now();
+      const id = crypto.randomUUID();
+      await pool.execute(
+        "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
+        [id, staffId, username, hashPassword(password), role, 1, now, now]
+      );
+      response.status(201).json({ id, staffId, username, role });
+    } catch (error) { next(error); }
+  });
 
   app.get("/v1/web/status", (_request: Request, response: Response) => {
     response.json({ ok: true, enabled: true });
