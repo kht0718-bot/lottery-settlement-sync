@@ -32,7 +32,8 @@ type SettlementRow = {
   payload_json: unknown;
 };
 
-type WebRequest = Request & { webUser?: Omit<WebSessionRow, "expiresAt"> };\ntype WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void };
+type WebRequest = Request & { webUser?: Omit<WebSessionRow, "expiresAt"> };
+type WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void };
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
