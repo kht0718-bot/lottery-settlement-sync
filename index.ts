@@ -368,11 +368,12 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 });
 process.on("unhandledRejection", (error) => process.stderr.write(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`));
 process.on("uncaughtException", (error) => process.stderr.write(`uncaught exception: ${error.stack ?? error.message}\n`));
-void initializeDatabaseWithRetry()
-  .then(() => app.listen(port, () => console.log(`lottery sync API started on port ${port} · maxDevices=${maxDevices} · dbConnections=${dbConnectionLimit}`)))
-  .catch(async (error) => {
+app.listen(port, () => {
+  console.log(`lottery sync API started on port ${port} · maxDevices=${maxDevices} · dbConnections=${dbConnectionLimit}`);
+  void initializeDatabaseWithRetry().catch(async (error) => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);
     process.stderr.write(`lottery sync API database initialization failed: ${message}\n`);
     await pool.end().catch(() => undefined);
     process.exit(1);
   });
+});
