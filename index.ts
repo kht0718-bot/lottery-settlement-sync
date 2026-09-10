@@ -374,7 +374,7 @@ app.get("/v1/sync/changes", requireDevice, async (_request: Request, response: R
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
   console.error(error);
   const status = typeof error === "object" && error !== null && "status" in error ? Number((error as { status?: unknown }).status) : 500;
-  if (status === 413) return response.status(413).json({ code: "REQUEST_TOO_LARGE", message: "전송 데이터가 너무 큽니다. 증빙사진은 최대 4장으로 줄여 다시 시도해 주세요." });
+  if (status === 413) return response.status(413).json({ code: "REQUEST_TOO_LARGE", message: "전송 데이터가 너무 큽니다. 증빙사진은 최대 8장으로 줄여 다시 시도해 주세요." });
   response.status(500).json({ message: "서버 처리 중 오류가 발생했습니다." });
 });
 process.on("unhandledRejection", (error) => process.stderr.write(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`));
