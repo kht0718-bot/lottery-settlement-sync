@@ -21,6 +21,8 @@ if (pairCode.length < 12) throw new Error("PAIR_CODE는 12자 이상이어야 �
 if (tokenSecret.length < 32) throw new Error("TOKEN_SECRET은 32자 이상이어야 합니다.");
 
 const port = Number(process.env.PORT ?? 3000);
+const configuredJsonLimit = process.env.JSON_BODY_LIMIT ?? "40mb";
+if (!/^\d+(?:kb|mb)$/i.test(configuredJsonLimit)) throw new Error("JSON_BODY_LIMIT은 예: 1mb 또는 40mb 형식이어야 합니다.");
 const maxDevices = 10; // 활성 등록 기기는 정확히 10대로 고정
 const adminApiToken = required("ADMIN_API_TOKEN");
 const configuredConnectionLimit = Number(process.env.DB_CONNECTION_LIMIT ?? 10);
