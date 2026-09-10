@@ -355,13 +355,13 @@ app.post("/v1/admin/device-actions", requireAdmin, async (request: Request, resp
   if (!parsed.success) return response.status(400).json({ message: "기기 작업 요청 형식이 올바르지 않습니다." });
   try {
     const now = Date.now(); const ids: number[] = [];
-    for (const deviceId of parsed.data.deviceIds) { const [result] = await pool.execute<mysql.ResultSetHeader>("INSERT INTO settlement_device_action_approvals (deviceId, action, status, requestedBy, reason, createdAt) VALUES (?, ?, 'requested', 'admin-console', ?, ?)", [deviceId, parsed.data.action, parsed.data.reason, now]); ids.push(result.insertId); }
+    for (const deviceId of parsed.data.deviceIds) { const [rows] = await pool.query<Array<{ id: number }>>("INSERT INTO settlement_device_action_approvals (deviceId, action, status, requestedBy, reason, createdAt) VALUES (?, ?, 'requested', 'admin-console', ?, ?) RETURNING id", [deviceId, parsed.data.action, parsed.data.reason, now]); if (!rows[0]) throw new Error("기기 작업 요청 ID를 생성하지 못했습니다."); ids.push(rows[0].id); }
     response.status(201).json({ ok: true, actionIds: ids });
   } catch (error) { next(error); }
 });
 
 app.post("/v1/admin/device-actions/:id/approve", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
-  try { const [result] = await pool.execute<mysql.ResultSetHeader>("UPDATE settlement_device_action_approvals SET status='approved', approvedBy='admin-console', approvedAt=? WHERE id=? AND status='requested'", [Date.now(), request.params.id]); if (!result.affectedRows) return response.status(409).json({ message: "승인할 수 없는 작업 상태입니다." }); response.json({ ok: true }); } catch (error) { next(error); }
+  try { const [rows] = await pool.query<Array<{ id: number }>>("UPDATE settlement_device_action_approvals SET status='approved', approvedBy='admin-console', approvedAt=? WHERE id=? AND status='requested' RETURNING id", [Date.now(), request.params.id]); if (!rows[0]) return response.status(409).json({ message: "승인할 수 없는 작업 상태입니다." }); response.json({ ok: true }); } catch (error) { next(error); }
 });
 
 app.post("/v1/admin/device-actions/:id/execute", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
@@ -383,11 +383,11 @@ app.post("/v1/test-reset", requireDevice, async (request: Request, response: Res
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [eventResult] = await connection.execute<mysql.ResultSetHeader>("DELETE FROM settlement_events");
-    const [settlementResult] = await connection.execute<mysql.ResultSetHeader>("DELETE FROM settlements");
+    const [eventRows] = await connection.query<Array<{ id: string }>>("DELETE FROM settlement_events RETURNING id");
+    const [settlementRows] = await connection.query<Array<{ id: string }>>("DELETE FROM settlements RETURNING id");
     await connection.execute("DELETE FROM devices");
     await connection.commit();
-    response.json({ ok: true, deletedEvents: eventResult.affectedRows, deletedSettlements: settlementResult.affectedRows });
+    response.json({ ok: true, deletedEvents: eventRows.length, deletedSettlements: settlementRows.length });
   } catch (error) {
     await connection.rollback();
     next(error);
