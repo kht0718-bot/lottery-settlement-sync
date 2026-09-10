@@ -4,7 +4,7 @@ type QueryResult<T> = [T[]];
 
 const toPostgresSql = (sql: string) => {
   let index = 0;
-  return sql.replace(/?/g, () => "$" + (++index));
+  return sql.replace(/\\?/g, () => "$" + (++index));
 };
 
 class PgCompatConnection {
