@@ -96,8 +96,10 @@ const tokenOnlyDisconnectResult = (deviceId: string) => ({ ok: true as const, de
 
 const initializeDatabaseWithRetry = async () => {
   const delays = [0, 2000, 5000, 10000, 20000, 30000];
+  const configuredAttempts = Number(process.env.DB_INIT_MAX_ATTEMPTS ?? delays.length);
+  const maxAttempts = Number.isFinite(configuredAttempts) ? Math.max(1, Math.floor(configuredAttempts)) : delays.length;
   let attempt = 0;
-  for (;;) {
+  while (attempt < maxAttempts) {
     const delay = attempt < delays.length ? delays[attempt] : delays[delays.length - 1];
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     try {
@@ -109,6 +111,7 @@ const initializeDatabaseWithRetry = async () => {
       console.error("[DB_INIT_RETRY]", attempt, error instanceof Error ? error.message : String(error));
     }
   }
+  throw new Error(`DB initialization failed after ${maxAttempts} attempts`);
 };
 
 const app = express();
