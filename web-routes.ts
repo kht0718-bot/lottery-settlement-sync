@@ -233,6 +233,7 @@ export function registerWebRoutes(
       events.push({ status: nextStatus, actor: { id: user.staffId, name: user.username, role: "admin" }, createdAt: now });
       payload.approvalEvents = events;
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=CAST(? AS JSON) WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
+      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,CAST(? AS JSON))", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: "admin" }, status: nextStatus })]);
       await connection.commit();
       response.json({ ok: true, id, status: nextStatus });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
