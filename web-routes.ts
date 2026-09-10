@@ -163,7 +163,7 @@ export function registerWebRoutes(
     if (!raw) return response.status(401).json({ code: "WEB_AUTH_REQUIRED", message: "웹 로그인이 필요합니다." });
     const tokenHash = hashToken(raw);
     void pool.query<WebSessionRow[]>(
-      "SELECT ws.id, ws.userId, wu.staffId, wu.username, wu.role, ws.expiresAt FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userId WHERE ws.tokenHash=? AND wu.active=TRUE AND ws.expiresAt>? LIMIT 1",
+      "SELECT ws.id, ws.userid AS \"userId\", wu.staffid AS \"staffId\", wu.username, wu.role, ws.expiresat AS \"expiresAt\" FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userid WHERE ws.tokenhash=? AND wu.active=TRUE AND ws.expiresat>? LIMIT 1",
       [tokenHash, Date.now()]
     ).then(([rows]) => {
       const session = rows[0];
@@ -250,7 +250,7 @@ export function registerWebRoutes(
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       if (!username || !password) return response.status(400).json({ code: "INVALID_LOGIN", message: "아이디와 비밀번호가 필요합니다." });
       const [rows] = await pool.query<WebUserRow[]>(
-        "SELECT id, staffId, username, passwordHash, role, active FROM web_users WHERE username=? LIMIT 1",
+        "SELECT id, staffid AS \"staffId\", username, passwordhash AS \"passwordHash\", role, active FROM web_users WHERE username=? LIMIT 1",
         [username]
       );
       const user = rows[0];
