@@ -1,0 +1,8 @@
+{
+  "name": "로또 정산",
+  "short_name": "로또정산",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff"
+}
