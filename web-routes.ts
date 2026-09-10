@@ -291,7 +291,10 @@ export function registerWebRoutes(
     const createdBy = (payload as any).createdBy;
     if (!createdBy || typeof createdBy !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy가 필요합니다." });
     if (user.role === "employee" && createdBy.id !== user.staffId) return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 본인 정산만 작성할 수 있습니다." });
-    const status = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
+    const requestedStatus = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
+    const status = user.role === "employee"
+      ? (["draft", "submitted"].includes(requestedStatus) ? requestedStatus : "draft")
+      : (["draft", "submitted", "rejected"].includes(requestedStatus) ? requestedStatus : "draft");
     const updatedAt = Number((payload as any).updatedAt);
     if (!Number.isFinite(updatedAt) || updatedAt <= 0) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "updatedAt이 필요합니다." });
     const connection = await pool.getConnection();
@@ -311,6 +314,7 @@ export function registerWebRoutes(
       const finalAuthorName = existing?.author_name ?? (typeof createdBy.name === "string" ? createdBy.name : user.username);
       const finalAuthorRole = existing?.author_role ?? user.role;
       (payload as any).createdBy = { id: finalAuthorId, name: finalAuthorName, role: finalAuthorRole };
+      (payload as any).status = status;
       await connection.execute(
         "INSERT INTO settlements (id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json) VALUES (?,?,?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO UPDATE SET business_date=EXCLUDED.business_date, author_name=EXCLUDED.author_name, settlement_status=EXCLUDED.settlement_status, updated_at=EXCLUDED.updated_at, payload_json=EXCLUDED.payload_json",
         [id, businessDate, finalAuthorId, finalAuthorName, finalAuthorRole, status, updatedAt, JSON.stringify(payload)]
