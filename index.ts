@@ -27,6 +27,8 @@ const configuredConnectionLimit = Number(process.env.DB_CONNECTION_LIMIT ?? 10);
 const dbConnectionLimit = Number.isFinite(configuredConnectionLimit) ? Math.min(50, Math.max(1, Math.floor(configuredConnectionLimit))) : 10;
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const connectionUrl = new URL(databaseUrl);
+const dbDriver = connectionUrl.protocol.replace(":", "").toLowerCase();
+if (dbDriver !== "mysql" && dbDriver !== "mysqls") throw new Error(`현재 서버는 MySQL 호환 DATABASE_URL만 지원합니다. 받은 프로토콜: ${dbDriver}`);
 connectionUrl.searchParams.delete("ssl-mode");
 connectionUrl.searchParams.delete("sslmode");
 const databaseCa = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
