@@ -90,12 +90,19 @@ export function registerWebRoutes(
         const [staffRows] = await pool.query<Array<{ id: string }>>(
           "SELECT id FROM settlement_staff WHERE status='active' AND role='admin' ORDER BY createdAt ASC LIMIT 1"
         );
-        const staff = staffRows[0];
-        if (!staff) {
-          console.warn("[WEB_TEST_BOOTSTRAP_SKIPPED] no active admin staff");
-          return;
-        }
+        let staff = staffRows[0];
         const now = Date.now();
+        if (!staff) {
+          // The Render database is an isolated web test database. Seed only this test
+          // administrator record when the database has no admin staff yet.
+          const testStaffId = "web-test-admin";
+          await pool.execute(
+            "INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,NULL) ON CONFLICT (id) DO NOTHING",
+            [testStaffId, "웹 테스트 관리자", null, "admin", "active", 1, now, now]
+          );
+          staff = { id: testStaffId };
+          console.info("[WEB_TEST_STAFF_SEEDED]", { staffId: testStaffId });
+        }
         await pool.execute(
           "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
           [crypto.randomUUID(), staff.id, username, hashPassword(password), "admin", true, now, now]
