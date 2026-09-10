@@ -72,12 +72,11 @@ export function registerWebRoutes(
 
 
   // Test-only first-admin bootstrap. It is disabled unless explicitly enabled by Render.
-  // This avoids exposing the ADMIN_API_TOKEN while allowing the isolated test web service
-  // to initialize itself from an already-active admin staff record.
+  // The retry handles route registration occurring before asynchronous schema creation completes.
   if (process.env.WEB_TEST_AUTO_BOOTSTRAP === "true") {
     const username = (process.env.WEB_TEST_ADMIN_USERNAME ?? "").trim();
     const password = process.env.WEB_TEST_ADMIN_PASSWORD ?? "";
-    void (async () => {
+    const runBootstrap = async (attempt = 1): Promise<void> => {
       try {
         if (!username || password.length < 12) {
           console.warn("[WEB_TEST_BOOTSTRAP_SKIPPED] missing username or secure password");
@@ -102,10 +101,15 @@ export function registerWebRoutes(
           [crypto.randomUUID(), staff.id, username, hashPassword(password), "admin", true, now, now]
         );
         console.info("[WEB_TEST_BOOTSTRAP_READY]", { username, role: "admin" });
-      } catch (error) {
+      } catch (error: any) {
+        if (error?.code === "42P01" && attempt < 20) {
+          setTimeout(() => { void runBootstrap(attempt + 1); }, 500);
+          return;
+        }
         console.error("[WEB_TEST_BOOTSTRAP_FAILED]", error);
       }
-    })();
+    };
+    void runBootstrap();
   }
 
   const requireWeb = (request: WebRequest, response: Response, next: NextFunction) => {
