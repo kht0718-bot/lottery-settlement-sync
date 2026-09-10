@@ -4,7 +4,7 @@ type QueryResult<T> = [T[]];
 
 const toPostgresSql = (sql: string) => {
   let index = 0;
-  return sql.replace(/\\?/g, () => "$" + (++index));
+  return sql.replace(/\?/g, () => "$" + (++index));
 };
 
 class PgCompatConnection {
@@ -44,7 +44,7 @@ export const createDatabasePool = (databaseUrl: string, connectionLimit: number)
   const parsed = new URL(databaseUrl);
   const protocol = parsed.protocol.replace(":", "").toLowerCase();
   if (protocol !== "postgres" && protocol !== "postgresql") {
-    throw new Error(`현재 테스트 웹 서비스는 PostgreSQL DATABASE_URL이 필요합니다. 받은 프로토콜: ${protocol}`);
+    throw new Error(\`현재 테스트 웹 서비스는 PostgreSQL DATABASE_URL이 필요합니다. 받은 프로토콜: \${protocol}\`);
   }
   const sslMode = parsed.searchParams.get("sslmode");
   const ssl = parsed.hostname.endsWith(".render.com") || sslMode === "require" || sslMode === "verify-full"
