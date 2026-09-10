@@ -1,5 +1,7 @@
 import "dotenv/config";
 import crypto from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
 import mysql, { type RowDataPacket } from "mysql2/promise";
 import { z } from "zod";
@@ -110,8 +112,11 @@ const initializeDatabaseWithRetry = async () => {
 };
 
 const app = express();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 app.disable("x-powered-by");
 app.use(express.json({ limit: configuredJsonLimit }));
+app.use(express.static(path.join(__dirname, "../public")));
 
 app.use((request, response, next) => {
   response.setHeader("X-Content-Type-Options", "nosniff");
