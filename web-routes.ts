@@ -210,6 +210,10 @@ export function registerWebRoutes(
         "INSERT INTO settlements (id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json) VALUES (?,?,?,?,?,?,?,CAST(? AS JSON)) ON DUPLICATE KEY UPDATE business_date=VALUES(business_date), author_name=VALUES(author_name), settlement_status=VALUES(settlement_status), updated_at=VALUES(updated_at), payload_json=VALUES(payload_json)",
         [id, businessDate, finalAuthorId, finalAuthorName, finalAuthorRole, status, updatedAt, JSON.stringify(payload)]
       );
+      await connection.execute(
+        "INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,CAST(? AS JSON)) ON DUPLICATE KEY UPDATE id=id",
+        [crypto.randomUUID(), id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: user.role }, status })]
+      );
       await connection.commit();
       response.status(existing ? 200 : 201).json({ ok: true, id });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
