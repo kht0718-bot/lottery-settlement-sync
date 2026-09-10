@@ -107,6 +107,25 @@ export function registerWebRoutes(
           "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
           [crypto.randomUUID(), staff.id, username, hashPassword(password), "admin", true, now, now]
         );
+        if (process.env.WEB_TEST_SEED_USERS === "true") {
+          const testEmployees = [
+            ["web-test-employee-1", "웹 테스트 직원 1", "web-employee1", "E1!TestWeb2026"],
+            ["web-test-employee-2", "웹 테스트 직원 2", "web-employee2", "E2!TestWeb2026"],
+            ["web-test-employee-3", "웹 테스트 직원 3", "web-employee3", "E3!TestWeb2026"],
+            ["web-test-employee-4", "웹 테스트 직원 4", "web-employee4", "E4!TestWeb2026"],
+          ] as const;
+          for (const [staffId, name, employeeUsername, employeePassword] of testEmployees) {
+            await pool.execute(
+              "INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,NULL) ON CONFLICT (id) DO NOTHING",
+              [staffId, name, null, "employee", "active", 1, now, now]
+            );
+            await pool.execute(
+              "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (staffId) DO NOTHING",
+              [crypto.randomUUID(), staffId, employeeUsername, hashPassword(employeePassword), "employee", true, now, now]
+            );
+          }
+          console.info("[WEB_TEST_EMPLOYEES_READY]", { count: 4 });
+        }
         console.info("[WEB_TEST_BOOTSTRAP_READY]", { username, role: "admin" });
       } catch (error: any) {
         if (error?.code === "42P01" && attempt < 20) {
