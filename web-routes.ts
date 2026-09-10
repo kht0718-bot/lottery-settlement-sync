@@ -43,7 +43,7 @@ const safeTokenEqual = (left: string, right: string) => crypto.timingSafeEqual(B
 const hashPassword = (password: string) => {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(password, salt, 64);
-  return `scrypt${salt.toString("base64url")}${derived.toString("base64url")}`;
+  return `scrypt$${salt.toString("base64url")}$${derived.toString("base64url")}`;
 };
 
 const verifyPassword = (password: string, stored: string) => {
