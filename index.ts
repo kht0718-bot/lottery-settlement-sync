@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, { type NextFunction, type Request, type Response } from "express";
-import mysql, { type RowDataPacket } from "mysql2/promise";
+import { createDatabasePool } from "./pg-compat.js";
 import { z } from "zod";
 import { registerStaffSyncRoutes } from "./staff-sync.js";
 import { registerWebRoutes } from "./web-routes.js";
@@ -32,14 +32,8 @@ const dbConnectionLimit = Number.isFinite(configuredConnectionLimit) ? Math.min(
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
 const connectionUrl = new URL(databaseUrl);
 const dbDriver = connectionUrl.protocol.replace(":", "").toLowerCase();
-if (dbDriver !== "mysql" && dbDriver !== "mysqls") throw new Error(`현재 서버는 MySQL 호환 DATABASE_URL만 지원합니다. 받은 프로토콜: ${dbDriver}`);
-console.log("[DB_TARGET]", JSON.stringify({ driver: dbDriver, host: connectionUrl.hostname || null, port: connectionUrl.port || "3306", database: connectionUrl.pathname.slice(1) || null, sslmode: connectionUrl.searchParams.get("sslmode") || null }));
-connectionUrl.searchParams.delete("ssl-mode");
-connectionUrl.searchParams.delete("sslmode");
-const databaseCa = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
-const databaseTls = databaseCa ? { ca: databaseCa, rejectUnauthorized: true, servername: connectionUrl.hostname } : { rejectUnauthorized: false, servername: connectionUrl.hostname };
-if (!databaseCa) console.warn("DATABASE_CA_CERT가 없어 Aiven TLS 암호화 연결을 CA 검증 없이 사용합니다.");
-const pool = mysql.createPool({ uri: connectionUrl.toString(), ssl: databaseTls, waitForConnections: true, connectionLimit: dbConnectionLimit });
+console.log("[DB_TARGET]", JSON.stringify({ driver: dbDriver, host: connectionUrl.hostname || null, port: connectionUrl.port || "5432", database: connectionUrl.pathname.slice(1) || null, sslmode: connectionUrl.searchParams.get("sslmode") || null }));
+const pool = createDatabasePool(databaseUrl, dbConnectionLimit);
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS devices (
@@ -53,12 +47,10 @@ const schemaStatements = [
     business_date DATE NOT NULL,
     author_id VARCHAR(64) NOT NULL,
     author_name VARCHAR(120) NOT NULL,
-    author_role ENUM('admin','employee') NOT NULL,
+    author_role VARCHAR(20) NOT NULL CHECK (author_role IN ('admin','employee')),
     settlement_status VARCHAR(40) NOT NULL,
     updated_at BIGINT NOT NULL,
-    payload_json JSON NOT NULL,
-    INDEX idx_settlements_date (business_date),
-    INDEX idx_settlements_updated (updated_at)
+    payload_json JSONB NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS settlement_events (
     id VARCHAR(96) PRIMARY KEY,
@@ -66,29 +58,63 @@ const schemaStatements = [
     device_id VARCHAR(64) NOT NULL,
     event_type VARCHAR(60) NOT NULL,
     created_at BIGINT NOT NULL,
-    payload_json JSON NOT NULL,
-    INDEX idx_events_settlement (settlement_id)
+    payload_json JSONB NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS settlement_staff (id VARCHAR(64) PRIMARY KEY, name VARCHAR(120) NOT NULL, phone VARCHAR(40), role ENUM('admin','employee') NOT NULL DEFAULT 'employee', status ENUM('active','deleted') NOT NULL DEFAULT 'active', version BIGINT NOT NULL DEFAULT 1, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL, deletedAt BIGINT NULL)`,
-  `CREATE TABLE IF NOT EXISTS settlement_staff_change_log (id BIGINT AUTO_INCREMENT PRIMARY KEY, staffId VARCHAR(64) NOT NULL, changeType ENUM('created','updated','deleted') NOT NULL, version BIGINT NOT NULL, payloadJson TEXT NOT NULL, changedBy VARCHAR(64) NULL, changedAt BIGINT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS settlement_devices (id VARCHAR(96) PRIMARY KEY, deviceFingerprint VARCHAR(160) NOT NULL UNIQUE, deviceName VARCHAR(120) NOT NULL, staffId VARCHAR(64) NULL, status ENUM('active','reset_pending','revoked','candidate') NOT NULL DEFAULT 'active', lastSyncAt BIGINT NULL, lastSeenAt BIGINT NULL, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS settlement_device_action_approvals (id BIGINT AUTO_INCREMENT PRIMARY KEY, deviceId VARCHAR(96) NOT NULL, action ENUM('reset','revoke','cleanup') NOT NULL, status ENUM('requested','approved','rejected','executed') NOT NULL DEFAULT 'requested', requestedBy VARCHAR(64) NOT NULL, approvedBy VARCHAR(64) NULL, reason VARCHAR(500) NOT NULL, createdAt BIGINT NOT NULL, approvedAt BIGINT NULL, executedAt BIGINT NULL)`,
-  `CREATE TABLE IF NOT EXISTS settlement_reconciliation (settlementId VARCHAR(96) PRIMARY KEY, safeAmount BIGINT NOT NULL DEFAULT 0, bankTransferAmount BIGINT NOT NULL DEFAULT 0, expectedTotal BIGINT NOT NULL DEFAULT 0, actualTotal BIGINT NOT NULL DEFAULT 0, difference BIGINT NOT NULL DEFAULT 0, sourceUpdatedAt BIGINT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS settlement_audit_logs (id BIGINT AUTO_INCREMENT PRIMARY KEY, actorId VARCHAR(64) NOT NULL, action VARCHAR(80) NOT NULL, entityType VARCHAR(50) NOT NULL, entityId VARCHAR(120) NOT NULL, detailJson TEXT NOT NULL, createdAt BIGINT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settlement_staff (
+    id VARCHAR(64) PRIMARY KEY, name VARCHAR(120) NOT NULL, phone VARCHAR(40),
+    role VARCHAR(20) NOT NULL DEFAULT 'employee' CHECK (role IN ('admin','employee')),
+    status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','deleted')),
+    version BIGINT NOT NULL DEFAULT 1, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL, deletedAt BIGINT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlement_staff_change_log (
+    id BIGSERIAL PRIMARY KEY, staffId VARCHAR(64) NOT NULL,
+    changeType VARCHAR(20) NOT NULL CHECK (changeType IN ('created','updated','deleted')),
+    version BIGINT NOT NULL, payloadJson TEXT NOT NULL, changedBy VARCHAR(64) NULL, changedAt BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlement_devices (
+    id VARCHAR(96) PRIMARY KEY, deviceFingerprint VARCHAR(160) NOT NULL UNIQUE, deviceName VARCHAR(120) NOT NULL,
+    staffId VARCHAR(64) NULL, status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active','reset_pending','revoked','candidate')),
+    lastSyncAt BIGINT NULL, lastSeenAt BIGINT NULL, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlement_device_action_approvals (
+    id BIGSERIAL PRIMARY KEY, deviceId VARCHAR(96) NOT NULL,
+    action VARCHAR(20) NOT NULL CHECK (action IN ('reset','revoke','cleanup')),
+    status VARCHAR(20) NOT NULL DEFAULT 'requested' CHECK (status IN ('requested','approved','rejected','executed')),
+    requestedBy VARCHAR(64) NOT NULL, approvedBy VARCHAR(64) NULL, reason VARCHAR(500) NOT NULL,
+    createdAt BIGINT NOT NULL, approvedAt BIGINT NULL, executedAt BIGINT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlement_reconciliation (
+    settlementId VARCHAR(96) PRIMARY KEY, safeAmount BIGINT NOT NULL DEFAULT 0, bankTransferAmount BIGINT NOT NULL DEFAULT 0,
+    expectedTotal BIGINT NOT NULL DEFAULT 0, actualTotal BIGINT NOT NULL DEFAULT 0, difference BIGINT NOT NULL DEFAULT 0, sourceUpdatedAt BIGINT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlement_audit_logs (
+    id BIGSERIAL PRIMARY KEY, actorId VARCHAR(64) NOT NULL, action VARCHAR(80) NOT NULL,
+    entityType VARCHAR(50) NOT NULL, entityId VARCHAR(120) NOT NULL, detailJson TEXT NOT NULL, createdAt BIGINT NOT NULL
+  )`,
   ...(webEnabled ? [
-    `CREATE TABLE IF NOT EXISTS web_users (id VARCHAR(64) PRIMARY KEY, staffId VARCHAR(64) NOT NULL UNIQUE, username VARCHAR(120) NOT NULL UNIQUE, passwordHash VARCHAR(255) NOT NULL, role ENUM('admin','employee') NOT NULL, active TINYINT(1) NOT NULL DEFAULT 1, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL, INDEX idx_web_users_staff (staffId))`,
-    `CREATE TABLE IF NOT EXISTS web_sessions (id VARCHAR(96) PRIMARY KEY, userId VARCHAR(64) NOT NULL, tokenHash CHAR(64) NOT NULL UNIQUE, expiresAt BIGINT NOT NULL, createdAt BIGINT NOT NULL, lastSeenAt BIGINT NOT NULL, INDEX idx_web_sessions_user (userId), INDEX idx_web_sessions_expires (expiresAt))`,
+    `CREATE TABLE IF NOT EXISTS web_users (
+      id VARCHAR(64) PRIMARY KEY, staffId VARCHAR(64) NOT NULL UNIQUE, username VARCHAR(120) NOT NULL UNIQUE,
+      passwordHash VARCHAR(255) NOT NULL, role VARCHAR(20) NOT NULL CHECK (role IN ('admin','employee')),
+      active BOOLEAN NOT NULL DEFAULT TRUE, createdAt BIGINT NOT NULL, updatedAt BIGINT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS web_sessions (
+      id VARCHAR(96) PRIMARY KEY, userId VARCHAR(64) NOT NULL, tokenHash CHAR(64) NOT NULL UNIQUE,
+      expiresAt BIGINT NOT NULL, createdAt BIGINT NOT NULL, lastSeenAt BIGINT NOT NULL
+    )`,
+  ] : []),
+  `CREATE INDEX IF NOT EXISTS idx_settlements_date ON settlements (business_date)`,
+  `CREATE INDEX IF NOT EXISTS idx_settlements_updated ON settlements (updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_events_settlement ON settlement_events (settlement_id)`,
+  ...(webEnabled ? [
+    `CREATE INDEX IF NOT EXISTS idx_web_users_staff ON web_users (staffId)`,
+    `CREATE INDEX IF NOT EXISTS idx_web_sessions_user ON web_sessions (userId)`,
+    `CREATE INDEX IF NOT EXISTS idx_web_sessions_expires ON web_sessions (expiresAt)`,
   ] : []),
 ];
 
 const initializeDatabase = async () => {
   for (const statement of schemaStatements) await pool.query(statement);
-  // 기존 테이블은 CREATE TABLE IF NOT EXISTS로 인덱스가 자동 추가되지 않으므로,
-  // 대량 동기화 정렬 전에 updated_at 인덱스를 실제로 보장한다.
-  const [indexRows] = await pool.query<(RowDataPacket & { count: number })[]>(
-    "SELECT COUNT(*) AS count FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'settlements' AND index_name = 'idx_settlements_updated'"
-  );
-  if (!indexRows[0]?.count) await pool.query("CREATE INDEX idx_settlements_updated ON settlements (updated_at)");
   console.log("lottery sync API database schema ready");
 };
 
@@ -172,7 +198,7 @@ const requireDevice = async (request: Request, response: Response, next: NextFun
   const payload = token ? decodeToken(token) : null;
   if (!payload) return response.status(401).json({ message: "유효한 기기 토큰이 필요합니다." });
   try {
-    const [rows] = await pool.query<(RowDataPacket & { id: string })[]>("SELECT id FROM devices WHERE id = ? LIMIT 1", [payload.deviceId]);
+    const [rows] = await pool.query<({ id: string })[]>("SELECT id FROM devices WHERE id = ? LIMIT 1", [payload.deviceId]);
     if (!rows[0]) return response.status(401).json({ message: "초기화되었거나 등록되지 않은 기기입니다. 다시 연결해 주세요." });
     request.deviceId = payload.deviceId;
     next();
@@ -228,10 +254,10 @@ app.post("/v1/pair", async (request: Request, response: Response, next: NextFunc
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
-      const [duplicateRows] = await connection.query<(RowDataPacket & { id: string; status: string })[]>("SELECT id, status FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1 FOR UPDATE", [deviceFingerprint]);
+      const [duplicateRows] = await connection.query<({ id: string; status: string })[]>("SELECT id, status FROM settlement_devices WHERE deviceFingerprint = ? LIMIT 1 FOR UPDATE", [deviceFingerprint]);
       const existingDevice = duplicateRows[0];
       if (!existingDevice) {
-        const [countRows] = await connection.query<(RowDataPacket & { count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending') FOR UPDATE");
+        const [countRows] = await connection.query<({ count: number })[]>("SELECT COUNT(*) AS count FROM settlement_devices WHERE status IN ('active','reset_pending') FOR UPDATE");
         if ((countRows[0]?.count ?? 0) >= maxDevices) {
           await connection.rollback();
           return response.status(409).json({ message: `등록 가능 기기 수(${maxDevices})에 도달했습니다.` });
@@ -293,7 +319,7 @@ app.post("/v1/admin/devices/:deviceId/disconnect", requireAdmin, async (request:
   const connection = await pool.getConnection();
   try {
     const now = Date.now(); await connection.beginTransaction();
-    const [rows] = await connection.query<Array<RowDataPacket & { status: string }>>("SELECT status FROM settlement_devices WHERE id=? LIMIT 1 FOR UPDATE", [deviceId]);
+    const [rows] = await connection.query<Array<{ status: string }>>("SELECT status FROM settlement_devices WHERE id=? LIMIT 1 FOR UPDATE", [deviceId]);
     const device = rows[0];
     if (!device) { await connection.rollback(); return response.status(404).json({ code: "DEVICE_NOT_FOUND", message: "등록된 기기를 찾지 못했습니다." }); }
     if (device.status === "revoked") { await connection.rollback(); return response.json({ ...tokenOnlyDisconnectResult(deviceId), alreadyRevoked: true }); }
@@ -311,7 +337,7 @@ app.post("/v1/admin/devices/:deviceId/delete-registration", requireAdmin, async 
   const connection = await pool.getConnection();
   try {
     const now = Date.now(); await connection.beginTransaction();
-    const [rows] = await connection.query<Array<RowDataPacket & { id: string }>>("SELECT id FROM settlement_devices WHERE id=? LIMIT 1 FOR UPDATE", [deviceId]);
+    const [rows] = await connection.query<Array<{ id: string }>>("SELECT id FROM settlement_devices WHERE id=? LIMIT 1 FOR UPDATE", [deviceId]);
     if (!rows[0]) { await connection.rollback(); return response.status(404).json({ code: "DEVICE_NOT_FOUND", message: "등록된 기기를 찾지 못했습니다." }); }
     // 정산·제출·승인·반려·증빙 이력은 절대 삭제하지 않고 기기 등록 두 테이블만 삭제한다.
     await connection.execute("DELETE FROM devices WHERE id=?", [deviceId]);
@@ -341,7 +367,7 @@ app.post("/v1/admin/device-actions/:id/approve", requireAdmin, async (request: R
 app.post("/v1/admin/device-actions/:id/execute", requireAdmin, async (request: Request, response: Response, next: NextFunction) => {
   const connection = await pool.getConnection();
   try {
-    const [rows] = await connection.query<Array<RowDataPacket & { deviceId: string; action: string }>>("SELECT deviceId, action FROM settlement_device_action_approvals WHERE id=? AND status='approved' LIMIT 1", [request.params.id]);
+    const [rows] = await connection.query<Array<{ deviceId: string; action: string }>>("SELECT deviceId, action FROM settlement_device_action_approvals WHERE id=? AND status='approved' LIMIT 1", [request.params.id]);
     const action = rows[0]; if (!action) return response.status(409).json({ message: "승인 완료된 작업만 실행할 수 있습니다." });
     await connection.beginTransaction();
     if (action.action === "revoke" || action.action === "cleanup") { await connection.execute("UPDATE settlement_devices SET status='revoked', updatedAt=? WHERE id=?", [Date.now(), action.deviceId]); await connection.execute("DELETE FROM devices WHERE id=?", [action.deviceId]); }
@@ -372,7 +398,7 @@ app.get("/v1/sync/changes", requireDevice, async (_request: Request, response: R
   try {
     // 먼저 updated_at 인덱스로 ID 500개만 결정한 뒤 payload를 가져온다.
     // 대용량 JSON을 정렬 버퍼에 올리지 않아 Aiven의 sort-memory 오류를 피한다.
-    const [rows] = await pool.query<(RowDataPacket & { payload_json: unknown })[]>(
+    const [rows] = await pool.query<({ payload_json: unknown })[]>(
       "SELECT s.payload_json FROM settlements s JOIN (SELECT id, updated_at FROM settlements ORDER BY updated_at DESC LIMIT 500) latest ON latest.id = s.id ORDER BY latest.updated_at DESC"
     );
     response.json({ settlements: rows.map((row) => typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : row.payload_json) });
