@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
-import type mysql from "mysql2/promise";
+import type { PgCompatPool } from "./pg-compat.js";
 
 type WebRole = "admin" | "employee";
 type WebUserRow = {
@@ -9,7 +9,7 @@ type WebUserRow = {
   username: string;
   passwordHash: string;
   role: WebRole;
-  active: number;
+  active: boolean;
 };
 
 type WebSessionRow = {
@@ -60,7 +60,7 @@ const disabled = (response: Response) => response.status(503).json({ code: "WEB_
 
 export function registerWebRoutes(
   app: WebApp,
-  pool: mysql.Pool,
+  pool: PgCompatPool,
   options: { webEnabled: boolean; adminApiToken: string }
 ) {
   if (!options.webEnabled) {
@@ -131,7 +131,7 @@ export function registerWebRoutes(
       const id = crypto.randomUUID();
       await pool.execute(
         "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
-        [id, staffId, username, hashPassword(password), role, 1, now, now]
+        [id, staffId, username, hashPassword(password), role, true, now, now]
       );
       response.status(201).json({ id, staffId, username, role });
     } catch (error) { next(error); }
@@ -207,11 +207,11 @@ export function registerWebRoutes(
       const finalAuthorRole = existing?.author_role ?? user.role;
       (payload as any).createdBy = { id: finalAuthorId, name: finalAuthorName, role: finalAuthorRole };
       await connection.execute(
-        "INSERT INTO settlements (id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json) VALUES (?,?,?,?,?,?,?,CAST(? AS JSON)) ON DUPLICATE KEY UPDATE business_date=VALUES(business_date), author_name=VALUES(author_name), settlement_status=VALUES(settlement_status), updated_at=VALUES(updated_at), payload_json=VALUES(payload_json)",
+        "INSERT INTO settlements (id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json) VALUES (?,?,?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO UPDATE SET business_date=EXCLUDED.business_date, author_name=EXCLUDED.author_name, settlement_status=EXCLUDED.settlement_status, updated_at=EXCLUDED.updated_at, payload_json=EXCLUDED.payload_json",
         [id, businessDate, finalAuthorId, finalAuthorName, finalAuthorRole, status, updatedAt, JSON.stringify(payload)]
       );
       await connection.execute(
-        "INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,CAST(? AS JSON)) ON DUPLICATE KEY UPDATE id=id",
+        "INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO NOTHING",
         [crypto.randomUUID(), id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: user.role }, status })]
       );
       await connection.commit();
@@ -236,8 +236,8 @@ export function registerWebRoutes(
       const events = Array.isArray(payload.approvalEvents) ? payload.approvalEvents : [];
       events.push({ status: nextStatus, actor: { id: user.staffId, name: user.username, role: "admin" }, createdAt: now });
       payload.approvalEvents = events;
-      await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=CAST(? AS JSON) WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
-      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,CAST(? AS JSON))", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: "admin" }, status: nextStatus })]);
+      await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
+      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: "admin" }, status: nextStatus })]);
       await connection.commit();
       response.json({ ok: true, id, status: nextStatus });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
