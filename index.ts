@@ -111,7 +111,7 @@ const initializeDatabaseWithRetry = async () => {
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: configuredJsonLimit }));
 
 app.use((request, response, next) => {
   response.setHeader("X-Content-Type-Options", "nosniff");
