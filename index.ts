@@ -153,7 +153,13 @@ app.use((request, response, next) => {
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Cache-Control", "no-store");
   const origin = request.header("origin");
-  if (origin && !allowedOrigins.includes(origin)) return response.status(403).json({ message: "허용되지 않은 Origin입니다." });
+  // Same-origin requests from the deployed web app must always be accepted.
+  // Additional cross-origin callers remain restricted to ALLOWED_ORIGINS.
+  const forwardedProto = (request.header("x-forwarded-proto") ?? request.protocol).split(",")[0].trim();
+  const requestHost = request.header("x-forwarded-host") ?? request.header("host");
+  const sameOrigin = requestHost ? `${forwardedProto}://${requestHost}` : null;
+  const originAllowed = !origin || origin === sameOrigin || allowedOrigins.includes(origin);
+  if (!originAllowed) return response.status(403).json({ message: "허용되지 않은 Origin입니다." });
   if (origin) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
