@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import type mysql from "mysql2/promise";
+import type { PgCompatPool } from "./pg-compat.js";
 
 export const staffChangeInput = z.object({
   id: z.string().min(1).max(64),
@@ -13,7 +13,7 @@ export const staffChangeInput = z.object({
   deletedAt: z.number().int().positive().nullable().optional(),
 });
 
-export function registerStaffSyncRoutes(app: { get: Function; post: Function }, pool: mysql.Pool, requireDevice: (request: Request, response: Response, next: NextFunction) => void) {
+export function registerStaffSyncRoutes(app: { get: Function; post: Function }, pool: PgCompatPool, requireDevice: (request: Request, response: Response, next: NextFunction) => void) {
   app.get("/v1/staff/changes", requireDevice, async (request: Request, response: Response, next: NextFunction) => {
     try {
       const cursor = Math.max(0, Number(request.query.cursor ?? 0));
@@ -36,7 +36,7 @@ export function registerStaffSyncRoutes(app: { get: Function; post: Function }, 
         const [currentRows] = await connection.query(`SELECT version FROM settlement_staff WHERE id = ? LIMIT 1`, [record.id]);
         const current = (currentRows as Array<{ version: number }>)[0];
         if (current && Number(current.version) >= record.version) continue;
-        await connection.execute(`INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),phone=VALUES(phone),role=VALUES(role),status=VALUES(status),version=VALUES(version),updatedAt=VALUES(updatedAt),deletedAt=VALUES(deletedAt)`, [record.id, record.name, record.phone ?? null, record.role, record.status, record.version, record.updatedAt, record.updatedAt, record.deletedAt ?? null]);
+        await connection.execute(`INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,phone=EXCLUDED.phone,role=EXCLUDED.role,status=EXCLUDED.status,version=EXCLUDED.version,updatedAt=EXCLUDED.updatedAt,deletedAt=EXCLUDED.deletedAt`, [record.id, record.name, record.phone ?? null, record.role, record.status, record.version, record.updatedAt, record.updatedAt, record.deletedAt ?? null]);
         await connection.execute(`INSERT INTO settlement_staff_change_log (staffId,changeType,version,payloadJson,changedAt) VALUES (?,?,?,?,?)`, [record.id, change.changeType, record.version, JSON.stringify(record), record.updatedAt]);
       }
       await connection.commit(); response.json({ ok: true, accepted: parsed.data.changes.map((change) => change.payload.id) });
