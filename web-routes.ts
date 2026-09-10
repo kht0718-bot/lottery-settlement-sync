@@ -70,6 +70,44 @@ export function registerWebRoutes(
     return;
   }
 
+
+  // Test-only first-admin bootstrap. It is disabled unless explicitly enabled by Render.
+  // This avoids exposing the ADMIN_API_TOKEN while allowing the isolated test web service
+  // to initialize itself from an already-active admin staff record.
+  if (process.env.WEB_TEST_AUTO_BOOTSTRAP === "true") {
+    const username = (process.env.WEB_TEST_ADMIN_USERNAME ?? "").trim();
+    const password = process.env.WEB_TEST_ADMIN_PASSWORD ?? "";
+    void (async () => {
+      try {
+        if (!username || password.length < 12) {
+          console.warn("[WEB_TEST_BOOTSTRAP_SKIPPED] missing username or secure password");
+          return;
+        }
+        const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users");
+        if (Number(countRows[0]?.count ?? 0) > 0) {
+          console.info("[WEB_TEST_BOOTSTRAP] already initialized");
+          return;
+        }
+        const [staffRows] = await pool.query<Array<{ id: string }>>(
+          "SELECT id FROM settlement_staff WHERE status='active' AND role='admin' ORDER BY createdAt ASC LIMIT 1"
+        );
+        const staff = staffRows[0];
+        if (!staff) {
+          console.warn("[WEB_TEST_BOOTSTRAP_SKIPPED] no active admin staff");
+          return;
+        }
+        const now = Date.now();
+        await pool.execute(
+          "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
+          [crypto.randomUUID(), staff.id, username, hashPassword(password), "admin", true, now, now]
+        );
+        console.info("[WEB_TEST_BOOTSTRAP_READY]", { username, role: "admin" });
+      } catch (error) {
+        console.error("[WEB_TEST_BOOTSTRAP_FAILED]", error);
+      }
+    })();
+  }
+
   const requireWeb = (request: WebRequest, response: Response, next: NextFunction) => {
     const raw = request.header("authorization")?.replace(/^Bearer\s+/i, "");
     if (!raw) return response.status(401).json({ code: "WEB_AUTH_REQUIRED", message: "웹 로그인이 필요합니다." });
@@ -104,7 +142,7 @@ export function registerWebRoutes(
       const now = Date.now();
       await pool.execute(
         "INSERT INTO web_users (id,staffId,username,passwordHash,role,active,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)",
-        [crypto.randomUUID(), staffId, username, hashPassword(password), "admin", 1, now, now]
+        [crypto.randomUUID(), staffId, username, hashPassword(password), "admin", true, now, now]
       );
       response.status(201).json({ ok: true });
     } catch (error) { next(error); }
@@ -137,7 +175,7 @@ export function registerWebRoutes(
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
-      const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=1");
+      const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=TRUE");
       if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 사용자는 관리자 포함 최대 5명입니다." });
       const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
       const staff = staffRows[0];
