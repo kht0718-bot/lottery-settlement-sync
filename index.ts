@@ -266,7 +266,7 @@ app.post("/v1/pair", async (request: Request, response: Response, next: NextFunc
       const deviceId = existingDevice?.id ?? `device-${crypto.randomUUID()}`;
       const now = Date.now();
       if (existingDevice) {
-        await connection.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), last_seen_at=VALUES(last_seen_at)", [deviceId, deviceName, now, now]);
+        await connection.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, last_seen_at=EXCLUDED.last_seen_at", [deviceId, deviceName, now, now]);
         await connection.execute("UPDATE settlement_devices SET deviceName=?, staffId=?, status='active', lastSeenAt=?, updatedAt=? WHERE id=?", [deviceName, staffId, now, now, deviceId]);
       } else {
         await connection.execute("INSERT INTO devices (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)", [deviceId, deviceName, now, now]);
@@ -291,8 +291,8 @@ app.post("/v1/sync/events", requireDevice, async (request: Request, response: Re
     await connection.beginTransaction();
     for (const event of parsed.data.events) {
       const record = event.payload;
-      await connection.execute("INSERT INTO settlement_events (id, settlement_id, device_id, event_type, created_at, payload_json) VALUES (?, ?, ?, ?, ?, CAST(? AS JSON)) ON DUPLICATE KEY UPDATE id = id", [event.id, record.id, request.deviceId!, event.eventType, event.createdAt, JSON.stringify(record)]);
-      await connection.execute("INSERT INTO settlements (id, business_date, author_id, author_name, author_role, settlement_status, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON)) ON DUPLICATE KEY UPDATE business_date = IF(VALUES(updated_at) >= updated_at, VALUES(business_date), business_date), author_id = IF(VALUES(updated_at) >= updated_at, VALUES(author_id), author_id), author_name = IF(VALUES(updated_at) >= updated_at, VALUES(author_name), author_name), author_role = IF(VALUES(updated_at) >= updated_at, VALUES(author_role), author_role), settlement_status = IF(VALUES(updated_at) >= updated_at, VALUES(settlement_status), settlement_status), payload_json = IF(VALUES(updated_at) >= updated_at, VALUES(payload_json), payload_json), updated_at = GREATEST(updated_at, VALUES(updated_at))", [record.id, record.businessDate, record.createdBy.id, record.createdBy.name, record.createdBy.role, record.status, record.updatedAt, JSON.stringify(record)]);
+      await connection.execute("INSERT INTO settlement_events (id, settlement_id, device_id, event_type, created_at, payload_json) VALUES (?, ?, ?, ?, ?, ?::jsonb) ON CONFLICT (id) DO NOTHING", [event.id, record.id, request.deviceId!, event.eventType, event.createdAt, JSON.stringify(record)]);
+      await connection.execute("INSERT INTO settlements (id, business_date, author_id, author_name, author_role, settlement_status, updated_at, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb) ON CONFLICT (id) DO UPDATE SET business_date=EXCLUDED.business_date, author_id=EXCLUDED.author_id, author_name=EXCLUDED.author_name, author_role=EXCLUDED.author_role, settlement_status=EXCLUDED.settlement_status, payload_json=EXCLUDED.payload_json, updated_at=EXCLUDED.updated_at WHERE EXCLUDED.updated_at >= settlements.updated_at", [record.id, record.businessDate, record.createdBy.id, record.createdBy.name, record.createdBy.role, record.status, record.updatedAt, JSON.stringify(record)]);
     }
     await connection.commit();
     const seenAt = Date.now();
