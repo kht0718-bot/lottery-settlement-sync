@@ -75,7 +75,7 @@ export function registerWebRoutes(
     if (!raw) return response.status(401).json({ code: "WEB_AUTH_REQUIRED", message: "웹 로그인이 필요합니다." });
     const tokenHash = hashToken(raw);
     void pool.query<WebSessionRow[]>(
-      "SELECT ws.id, ws.userId, wu.staffId, wu.username, wu.role, ws.expiresAt FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userId WHERE ws.tokenHash=? AND wu.active=1 AND ws.expiresAt>? LIMIT 1",
+      "SELECT ws.id, ws.userId, wu.staffId, wu.username, wu.role, ws.expiresAt FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userId WHERE ws.tokenHash=? AND wu.active=TRUE AND ws.expiresAt>? LIMIT 1",
       [tokenHash, Date.now()]
     ).then(([rows]) => {
       const session = rows[0];
@@ -109,6 +109,21 @@ export function registerWebRoutes(
       response.status(201).json({ ok: true });
     } catch (error) { next(error); }
   });
+
+  const validateWebAttachments = (payload: any) => {
+    const attachments = payload?.attachments;
+    if (attachments === undefined) return null;
+    if (!Array.isArray(attachments)) return "attachments 형식이 올바르지 않습니다.";
+    if (attachments.length > 8) return "사진 첨부는 최대 8장입니다.";
+    const totalChars = attachments.reduce((sum: number, item: any) => sum + (typeof item?.dataUrl === "string" ? item.dataUrl.length : 0), 0);
+    if (totalChars > 32 * 1024 * 1024) return "첨부 사진 용량이 너무 큽니다.";
+    for (const item of attachments) {
+      if (!item || typeof item !== "object" || typeof item.name !== "string" || typeof item.dataUrl !== "string" || !item.dataUrl.startsWith("data:image/")) {
+        return "사진 첨부 형식이 올바르지 않습니다.";
+      }
+    }
+    return null;
+  };
 
   const requireAdmin = (request: WebRequest, response: Response, next: NextFunction) => {
     if (request.webUser?.role !== "admin") return response.status(403).json({ code: "WEB_ADMIN_REQUIRED", message: "관리자 권한이 필요합니다." });
@@ -180,6 +195,8 @@ export function registerWebRoutes(
     const user = request.webUser!;
     const payload = request.body?.payload;
     if (!payload || typeof payload !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "payload가 필요합니다." });
+    const attachmentError = validateWebAttachments(payload);
+    if (attachmentError) return response.status(400).json({ code: "INVALID_ATTACHMENTS", message: attachmentError });
     const id = typeof (payload as any).id === "string" ? (payload as any).id.trim() : "";
     const businessDate = typeof (payload as any).businessDate === "string" ? (payload as any).businessDate : "";
     if (!id || id.length > 96 || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "정산 ID 또는 영업일 형식이 올바르지 않습니다." });
