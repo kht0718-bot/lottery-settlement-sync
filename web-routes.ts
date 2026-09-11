@@ -259,6 +259,7 @@ export function registerWebRoutes(
       const [userRows] = await pool.query<Array<{ id: string }>>("SELECT id FROM web_users WHERE staffid=? LIMIT 1", [staffId]);
       if (!userRows[0]) return response.status(409).json({ code: "WEB_ACCOUNT_NOT_LINKED", message: "연결된 웹 계정이 없습니다." });
       await pool.query("UPDATE web_users SET active=? WHERE staffid=?", [active, staffId]);
+      if (!active) await pool.query("DELETE FROM web_sessions WHERE userid IN (SELECT id FROM web_users WHERE staffid=?)", [staffId]);
       response.json({ ok: true, staffId, active });
     } catch (error) { next(error); }
   });
