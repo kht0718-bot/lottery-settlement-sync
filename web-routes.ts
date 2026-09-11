@@ -374,6 +374,7 @@ export function registerWebRoutes(
       const [rows] = await connection.query<SettlementRow[]>("SELECT id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json FROM settlements WHERE id=? LIMIT 1 FOR UPDATE", [id]);
       const row = rows[0];
       if (!row) { await connection.rollback(); return response.status(404).json({ code: "SETTLEMENT_NOT_FOUND", message: "정산을 찾을 수 없습니다." }); }
+      if (row.settlement_status !== "submitted") { await connection.rollback(); return response.status(409).json({ code: "INVALID_SETTLEMENT_STATUS", message: "승인요청 상태의 정산만 처리할 수 있습니다." }); }
       const payload = typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : row.payload_json as any;
       const now = Date.now();
       payload.status = nextStatus;
