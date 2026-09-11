@@ -249,6 +249,20 @@ export function registerWebRoutes(
     } catch (error) { next(error); }
   });
 
+  app.patch("/v1/web/admin/staff/:id/web-account", requireWeb, requireAdmin, async (request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      const staffId = request.params.id;
+      const active = typeof request.body?.active === "boolean" ? request.body.active : null;
+      if (active === null) return response.status(400).json({ code: "INVALID_ACTIVE", message: "활성 상태가 필요합니다." });
+      const [staffRows] = await pool.query<Array<{ id: string }>>("SELECT id FROM settlement_staff WHERE id=? AND deletedAt IS NULL LIMIT 1", [staffId]);
+      if (!staffRows[0]) return response.status(404).json({ code: "STAFF_NOT_FOUND", message: "직원을 찾을 수 없습니다." });
+      const [userRows] = await pool.query<Array<{ id: string }>>("SELECT id FROM web_users WHERE staffid=? LIMIT 1", [staffId]);
+      if (!userRows[0]) return response.status(409).json({ code: "WEB_ACCOUNT_NOT_LINKED", message: "연결된 웹 계정이 없습니다." });
+      await pool.query("UPDATE web_users SET active=? WHERE staffid=?", [active, staffId]);
+      response.json({ ok: true, staffId, active });
+    } catch (error) { next(error); }
+  });
+
   app.get("/v1/web/status", (_request: Request, response: Response) => {
     response.json({ ok: true, enabled: true });
   });
