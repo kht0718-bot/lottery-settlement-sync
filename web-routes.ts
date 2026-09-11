@@ -384,7 +384,7 @@ export function registerWebRoutes(
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
       await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: "admin" }, status: nextStatus })]);
       await connection.commit();
-      response.json({ ok: true, id, status: nextStatus });
+      response.json({ ok: true, id, status: nextStatus, payload });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
   };
   app.post("/v1/web/settlements/:id/approve", requireWeb, transitionSettlement("manager_approved"));
