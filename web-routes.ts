@@ -342,7 +342,7 @@ export function registerWebRoutes(
         await connection.rollback();
         return response.status(403).json({ code: "WEB_SETTLEMENT_FORBIDDEN", message: "다른 직원의 정산은 수정할 수 없습니다." });
       }
-      if (existing && user.role === "employee" && !["draft","submitted","rejected"].includes(existing.settlement_status)) {
+      if (existing && existing.settlement_status !== "draft" && user.role === "employee") {
         await connection.rollback();
         return response.status(409).json({ code: "WEB_SETTLEMENT_LOCKED", message: "승인 완료된 정산은 직원이 수정할 수 없습니다." });
       }
