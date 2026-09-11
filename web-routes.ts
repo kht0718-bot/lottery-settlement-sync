@@ -291,6 +291,19 @@ export function registerWebRoutes(
     const createdBy = (payload as any).createdBy;
     if (!createdBy || typeof createdBy !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy가 필요합니다." });
     if (user.role === "employee" && createdBy.id !== user.staffId) return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 본인 정산만 작성할 수 있습니다." });
+    const lotteryItems = (payload as any).lotteryItems;
+    if (lotteryItems !== undefined) {
+      if (!Array.isArray(lotteryItems)) return response.status(400).json({ code: "INVALID_LOTTERY_ITEMS", message: "복권 재고 데이터 형식이 올바르지 않습니다." });
+      for (const item of lotteryItems) {
+        if (!item || typeof item !== "object") return response.status(400).json({ code: "INVALID_LOTTERY_ITEM", message: "복권 재고 항목 형식이 올바르지 않습니다." });
+        const original = Number(item.originalStock ?? 0), pre = Number(item.preWorkReturn ?? 0), adjusted = Number(item.adjustedStock ?? original - pre), restock = Number(item.restock ?? 0), onDuty = Number(item.onDutyReturn ?? 0), available = Number(item.availableStock ?? adjusted + restock - onDuty), ending = Number(item.endingStock ?? 0);
+        if (![original, pre, adjusted, restock, onDuty, available, ending].every((v) => Number.isFinite(v) && v >= 0)) return response.status(400).json({ code: "INVALID_LOTTERY_QUANTITY", message: "복권 재고 및 반품 수량은 0 이상의 숫자여야 합니다." });
+        if (pre > original || adjusted !== Math.max(0, original - pre) || onDuty > adjusted + restock || available !== Math.max(0, adjusted + restock - onDuty) || ending > available) return response.status(400).json({ code: "INVALID_RETURN_FLOW", message: "반품·재고 계산 흐름이 올바르지 않습니다." });
+        Object.assign(item, { originalStock: original, preWorkReturn: pre, adjustedStock: adjusted, restock, onDutyReturn: onDuty, availableStock: available, endingStock: ending, soldQuantity: Math.max(0, available - ending) });
+      }
+      (payload as any).preWorkReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.preWorkReturn }));
+      (payload as any).onDutyReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.onDutyReturn }));
+    }
     const requestedStatus = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
     const status = user.role === "employee"
       ? (["draft", "submitted"].includes(requestedStatus) ? requestedStatus : "draft")
