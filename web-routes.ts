@@ -397,11 +397,17 @@ export function registerWebRoutes(
       const limit = Number.isFinite(limitValue) ? Math.min(500, Math.max(1, Math.floor(limitValue))) : 100;
       const user = request.webUser!;
       const params: unknown[] = [];
-      let where = "";
+      const conditions: string[] = [];
       if (user.role === "employee") {
-        where = "WHERE author_id=?";
+        conditions.push("author_id=?");
         params.push(user.staffId);
       }
+      const requestedStatus = typeof request.query.status === "string" ? request.query.status.trim() : "";
+      if (requestedStatus) {
+        conditions.push("settlement_status=?");
+        params.push(requestedStatus);
+      }
+      const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
       const [rows] = await pool.query<SettlementRow[]>(
         `SELECT id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json FROM settlements ${where} ORDER BY updated_at DESC LIMIT ${limit}`,
         params
