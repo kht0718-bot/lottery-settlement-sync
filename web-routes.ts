@@ -203,6 +203,7 @@ export function registerWebRoutes(
     if (attachments === undefined) return null;
     if (!Array.isArray(attachments)) return "attachments 형식이 올바르지 않습니다.";
     if (attachments.length > 8) return "사진 첨부는 최대 8장입니다.";
+    if (attachments.some((item: any) => !item || typeof item !== "object" || typeof item.name !== "string" || item.name.length > 255 || typeof item.dataUrl !== "string" || !item.dataUrl.startsWith("data:image/"))) return "사진 첨부 형식이 올바르지 않습니다.";
     const totalChars = attachments.reduce((sum: number, item: any) => sum + (typeof item?.dataUrl === "string" ? item.dataUrl.length : 0), 0);
     if (totalChars > 32 * 1024 * 1024) return "첨부 사진 용량이 너무 큽니다.";
     for (const item of attachments) {
