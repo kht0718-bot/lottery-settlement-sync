@@ -327,6 +327,7 @@ export function registerWebRoutes(
       (payload as any).preWorkReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.preWorkReturn }));
       (payload as any).onDutyReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.onDutyReturn }));
     }
+    if (user.role === "employee" && createdBy.role !== undefined && createdBy.role !== "employee") return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 직원 역할의 본인 정산만 작성할 수 있습니다." });
     const requestedStatus = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
     const status = user.role === "employee"
       ? (["draft", "submitted"].includes(requestedStatus) ? requestedStatus : "draft")
