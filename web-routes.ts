@@ -240,6 +240,15 @@ export function registerWebRoutes(
     } catch (error) { next(error); }
   });
 
+  app.get("/v1/web/admin/staff", requireWeb, requireAdmin, async (_request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      const [rows] = await pool.query<Array<{ id: string; name: string; role: WebRole; status: string; webUsername: string | null; webActive: boolean | null }>>(
+        "SELECT ss.id, ss.name, ss.role, ss.status, wu.username AS \"webUsername\", wu.active AS \"webActive\" FROM settlement_staff ss LEFT JOIN web_users wu ON wu.staffid=ss.id WHERE ss.deletedAt IS NULL ORDER BY CASE WHEN ss.role='admin' THEN 0 ELSE 1 END, ss.createdAt ASC"
+      );
+      response.json({ staff: rows.map((row) => ({ id: row.id, name: row.name, role: row.role, status: row.status, webUsername: row.webUsername, webActive: row.webActive })) });
+    } catch (error) { next(error); }
+  });
+
   app.get("/v1/web/status", (_request: Request, response: Response) => {
     response.json({ ok: true, enabled: true });
   });
