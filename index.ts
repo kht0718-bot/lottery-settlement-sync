@@ -164,7 +164,7 @@ app.use((request, response, next) => {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
     response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Token");
-    response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   }
   if (request.method === "OPTIONS") return response.sendStatus(204);
   next();
