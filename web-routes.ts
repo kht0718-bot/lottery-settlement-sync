@@ -315,9 +315,8 @@ export function registerWebRoutes(
     const id = typeof (payload as any).id === "string" ? (payload as any).id.trim() : "";
     const businessDate = typeof (payload as any).businessDate === "string" ? (payload as any).businessDate : "";
     if (!id || id.length > 96 || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "정산 ID 또는 영업일 형식이 올바르지 않습니다." });
-    const createdBy = (payload as any).createdBy;
-    if (!createdBy || typeof createdBy !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy가 필요합니다." });
-    if (user.role === "employee" && createdBy.id !== user.staffId) return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 본인 정산만 작성할 수 있습니다." });
+    const suppliedCreatedBy = (payload as any).createdBy;
+    if (suppliedCreatedBy !== undefined && (typeof suppliedCreatedBy !== "object" || suppliedCreatedBy === null)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy 형식이 올바르지 않습니다." });
     const lotteryItems = (payload as any).lotteryItems;
     if (lotteryItems !== undefined) {
       if (!Array.isArray(lotteryItems)) return response.status(400).json({ code: "INVALID_LOTTERY_ITEMS", message: "복권 재고 데이터 형식이 올바르지 않습니다." });
@@ -331,7 +330,6 @@ export function registerWebRoutes(
       (payload as any).preWorkReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.preWorkReturn }));
       (payload as any).onDutyReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.onDutyReturn }));
     }
-    if (user.role === "employee" && createdBy.role !== undefined && createdBy.role !== "employee") return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 직원 역할의 본인 정산만 작성할 수 있습니다." });
     const requestedStatus = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
     const status = user.role === "employee"
       ? (["draft", "submitted"].includes(requestedStatus) ? requestedStatus : "draft")
