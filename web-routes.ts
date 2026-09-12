@@ -6,6 +6,7 @@ type WebRole = "admin" | "employee";
 type WebUserRow = {
   id: string;
   staffId: string;
+  staffName: string;
   username: string;
   passwordHash: string;
   role: WebRole;
@@ -276,7 +277,7 @@ export function registerWebRoutes(
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       if (!username || !password) return response.status(400).json({ code: "INVALID_LOGIN", message: "아이디와 비밀번호가 필요합니다." });
       const [rows] = await pool.query<WebUserRow[]>(
-        "SELECT id, staffid AS \"staffId\", username, passwordhash AS \"passwordHash\", role, active FROM web_users WHERE username=? LIMIT 1",
+        "SELECT wu.id, wu.staffid AS \"staffId\", ss.name AS \"staffName\", wu.username, wu.passwordhash AS \"passwordHash\", wu.role, wu.active FROM web_users wu JOIN settlement_staff ss ON ss.id=wu.staffid WHERE wu.username=? AND ss.status=\'active\' AND ss.deletedAt IS NULL LIMIT 1",
         [username]
       );
       const user = rows[0];
