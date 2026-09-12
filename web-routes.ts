@@ -228,7 +228,7 @@ export function registerWebRoutes(
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
       const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=TRUE");
-      if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 사용자는 관리자 포함 최대 5명입니다." });
+      if (Number(countRows[0]?.count ?? 0) >= 10) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 최대 10개입니다." });
       const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
       const staff = staffRows[0];
       if (!staff || staff.status !== "active" || staff.role !== role) return response.status(400).json({ code: "INVALID_STAFF", message: "활성 직원 정보와 역할이 일치해야 합니다." });
@@ -401,6 +401,11 @@ export function registerWebRoutes(
       const events = Array.isArray(payload.approvalEvents) ? payload.approvalEvents : [];
       events.push({ status: nextStatus, actor: { id: user.staffId, name: user.staffName, role: "admin" }, createdAt: now });
       payload.approvalEvents = events;
+      payload.approvedAt = nextStatus === "manager_approved" ? now : payload.approvedAt;
+      payload.approvedBy = nextStatus === "manager_approved" ? { id: user.staffId, name: user.staffName, role: "admin" } : payload.approvedBy;
+      // This event is written in the same transaction as the settlement status change so
+      // other clients can pull the approval immediately from the shared sync store.
+      payload.syncState = "server_synced";
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
       await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: "admin" }, status: nextStatus })]);
       await connection.commit();
