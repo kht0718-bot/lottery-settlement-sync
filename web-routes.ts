@@ -164,7 +164,7 @@ export function registerWebRoutes(
     if (!raw) return response.status(401).json({ code: "WEB_AUTH_REQUIRED", message: "웹 로그인이 필요합니다." });
     const tokenHash = hashToken(raw);
     void pool.query<WebSessionRow[]>(
-      "SELECT ws.id, ws.userid AS \"userId\", wu.staffid AS \"staffId\", wu.username, wu.role, ws.expiresat AS \"expiresAt\" FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userid JOIN settlement_staff ss ON ss.id = wu.staffid WHERE ws.tokenhash=? AND wu.active=TRUE AND ss.status='active' AND ss.deletedAt IS NULL AND ws.expiresat>? LIMIT 1",
+      "SELECT ws.id, ws.userid AS \"userId\", wu.staffid AS \"staffId\", ss.name AS \"staffName\", wu.username, wu.role, ws.expiresat AS \"expiresAt\" FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userid JOIN settlement_staff ss ON ss.id = wu.staffid WHERE ws.tokenhash=? AND wu.active=TRUE AND ss.status='active' AND ss.deletedAt IS NULL AND ws.expiresat>? LIMIT 1",
       [tokenHash, Date.now()]
     ).then(([rows]) => {
       const session = rows[0];
