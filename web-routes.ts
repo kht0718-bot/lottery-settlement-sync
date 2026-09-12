@@ -16,6 +16,7 @@ type WebSessionRow = {
   id: string;
   userId: string;
   staffId: string;
+  staffName: string;
   username: string;
   role: WebRole;
   expiresAt: number;
@@ -33,7 +34,7 @@ type SettlementRow = {
 };
 
 type WebRequest = Request & { webUser?: Omit<WebSessionRow, "expiresAt"> };
-type WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void; all: (path: string, ...handlers: any[]) => void };
+type WebApp = { get: (path: string, ...handlers: any[]) => void; post: (path: string, ...handlers: any[]) => void; patch: (path: string, ...handlers: any[]) => void; all: (path: string, ...handlers: any[]) => void };
 
 const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
@@ -168,7 +169,7 @@ export function registerWebRoutes(
     ).then(([rows]) => {
       const session = rows[0];
       if (!session) return response.status(401).json({ code: "WEB_SESSION_INVALID", message: "웹 로그인 세션이 유효하지 않습니다." });
-      request.webUser = { id: session.id, userId: session.userId, staffId: session.staffId, username: session.username, role: session.role };
+      request.webUser = { id: session.id, userId: session.userId, staffId: session.staffId, staffName: session.staffName, username: session.username, role: session.role };
       return pool.execute("UPDATE web_sessions SET lastSeenAt=? WHERE id=?", [Date.now(), session.id]).then(() => next());
     }).catch(next);
   };
@@ -354,8 +355,19 @@ export function registerWebRoutes(
         return response.status(409).json({ code: "WEB_SETTLEMENT_STALE", message: "더 최신 정산 데이터가 이미 저장되어 있습니다. 새로고침 후 다시 시도하세요." });
       }
       const finalAuthorId = existing?.author_id ?? user.staffId;
-      const finalAuthorName = existing?.author_name ?? (typeof createdBy.name === "string" ? createdBy.name : user.username);
-      const finalAuthorRole = existing?.author_role ?? user.role;
+      // Use the canonical staff name rather than the web login ID so records created
+      // on the web match the identity displayed by the Android APK.
+      const [authorRows] = await connection.query<Array<{ name: string; role: WebRole; status: string }>>(
+        "SELECT name, role, status FROM settlement_staff WHERE id=? LIMIT 1",
+        [finalAuthorId]
+      );
+      const canonicalAuthor = authorRows[0];
+      if (!canonicalAuthor || canonicalAuthor.status !== "active") {
+        await connection.rollback();
+        return response.status(403).json({ code: "WEB_AUTHOR_INACTIVE", message: "활성 직원 정보가 필요합니다." });
+      }
+      const finalAuthorName = existing?.author_name ?? canonicalAuthor.name;
+      const finalAuthorRole = existing?.author_role ?? canonicalAuthor.role;
       (payload as any).createdBy = { id: finalAuthorId, name: finalAuthorName, role: finalAuthorRole };
       (payload as any).status = status;
       await connection.execute(
@@ -364,7 +376,7 @@ export function registerWebRoutes(
       );
       await connection.execute(
         "INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO NOTHING",
-        [crypto.randomUUID(), id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: user.role }, status })]
+        [crypto.randomUUID(), id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: user.role }, status })]
       );
       await connection.commit();
       response.status(existing ? 200 : 201).json({ ok: true, id });
@@ -387,10 +399,10 @@ export function registerWebRoutes(
       payload.status = nextStatus;
       payload.updatedAt = now;
       const events = Array.isArray(payload.approvalEvents) ? payload.approvalEvents : [];
-      events.push({ status: nextStatus, actor: { id: user.staffId, name: user.username, role: "admin" }, createdAt: now });
+      events.push({ status: nextStatus, actor: { id: user.staffId, name: user.staffName, role: "admin" }, createdAt: now });
       payload.approvalEvents = events;
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
-      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.username, role: "admin" }, status: nextStatus })]);
+      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: "admin" }, status: nextStatus })]);
       await connection.commit();
       response.json({ ok: true, id, status: nextStatus, payload });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
