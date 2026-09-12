@@ -290,12 +290,12 @@ export function registerWebRoutes(
         "INSERT INTO web_sessions (id,userId,tokenHash,expiresAt,createdAt,lastSeenAt) VALUES (?,?,?,?,?,?)",
         [crypto.randomUUID(), user.id, hashToken(token), expiresAt, now, now]
       );
-      response.json({ token, expiresAt, user: { staffId: user.staffId, username: user.username, role: user.role } });
+      response.json({ token, expiresAt, user: { staffId: user.staffId, staffName: user.staffName, username: user.username, role: user.role } });
     } catch (error) { next(error); }
   });
 
   app.get("/v1/web/auth/me", requireWeb, (request: WebRequest, response: Response) => {
-    response.json({ user: request.webUser ? { staffId: request.webUser.staffId, username: request.webUser.username, role: request.webUser.role } : null });
+    response.json({ user: request.webUser ? { staffId: request.webUser.staffId, staffName: request.webUser.staffName, username: request.webUser.username, role: request.webUser.role } : null });
   });
 
   app.post("/v1/web/auth/logout", requireWeb, async (request: WebRequest, response: Response, next: NextFunction) => {
