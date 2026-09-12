@@ -6,6 +6,7 @@ type WebRole = "admin" | "employee";
 type WebUserRow = {
   id: string;
   staffId: string;
+  staffName: string;
   username: string;
   passwordHash: string;
   role: WebRole;
@@ -164,7 +165,7 @@ export function registerWebRoutes(
     if (!raw) return response.status(401).json({ code: "WEB_AUTH_REQUIRED", message: "웹 로그인이 필요합니다." });
     const tokenHash = hashToken(raw);
     void pool.query<WebSessionRow[]>(
-      "SELECT ws.id, ws.userid AS \"userId\", wu.staffid AS \"staffId\", wu.username, wu.role, ws.expiresat AS \"expiresAt\" FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userid JOIN settlement_staff ss ON ss.id = wu.staffid WHERE ws.tokenhash=? AND wu.active=TRUE AND ss.status='active' AND ss.deletedAt IS NULL AND ws.expiresat>? LIMIT 1",
+      "SELECT ws.id, ws.userid AS \"userId\", wu.staffid AS \"staffId\", ss.name AS \"staffName\", wu.username, wu.role, ws.expiresat AS \"expiresAt\" FROM web_sessions ws JOIN web_users wu ON wu.id = ws.userid JOIN settlement_staff ss ON ss.id = wu.staffid WHERE ws.tokenhash=? AND wu.active=TRUE AND ss.status='active' AND ss.deletedAt IS NULL AND ws.expiresat>? LIMIT 1",
       [tokenHash, Date.now()]
     ).then(([rows]) => {
       const session = rows[0];
@@ -228,7 +229,7 @@ export function registerWebRoutes(
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
       const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=TRUE");
-      if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 사용자는 관리자 포함 최대 5명입니다." });
+      if (Number(countRows[0]?.count ?? 0) >= 10) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 최대 10개입니다." });
       const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
       const staff = staffRows[0];
       if (!staff || staff.status !== "active" || staff.role !== role) return response.status(400).json({ code: "INVALID_STAFF", message: "활성 직원 정보와 역할이 일치해야 합니다." });
@@ -276,7 +277,7 @@ export function registerWebRoutes(
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       if (!username || !password) return response.status(400).json({ code: "INVALID_LOGIN", message: "아이디와 비밀번호가 필요합니다." });
       const [rows] = await pool.query<WebUserRow[]>(
-        "SELECT id, staffid AS \"staffId\", username, passwordhash AS \"passwordHash\", role, active FROM web_users WHERE username=? LIMIT 1",
+        "SELECT wu.id, wu.staffid AS \"staffId\", ss.name AS \"staffName\", wu.username, wu.passwordhash AS \"passwordHash\", wu.role, wu.active FROM web_users wu JOIN settlement_staff ss ON ss.id=wu.staffid WHERE wu.username=? AND ss.status=\'active\' AND ss.deletedAt IS NULL LIMIT 1",
         [username]
       );
       const user = rows[0];
@@ -290,12 +291,12 @@ export function registerWebRoutes(
         "INSERT INTO web_sessions (id,userId,tokenHash,expiresAt,createdAt,lastSeenAt) VALUES (?,?,?,?,?,?)",
         [crypto.randomUUID(), user.id, hashToken(token), expiresAt, now, now]
       );
-      response.json({ token, expiresAt, user: { staffId: user.staffId, username: user.username, role: user.role } });
+      response.json({ token, expiresAt, user: { staffId: user.staffId, staffName: user.staffName, username: user.username, role: user.role } });
     } catch (error) { next(error); }
   });
 
   app.get("/v1/web/auth/me", requireWeb, (request: WebRequest, response: Response) => {
-    response.json({ user: request.webUser ? { staffId: request.webUser.staffId, username: request.webUser.username, role: request.webUser.role } : null });
+    response.json({ user: request.webUser ? { staffId: request.webUser.staffId, staffName: request.webUser.staffName, username: request.webUser.username, role: request.webUser.role } : null });
   });
 
   app.post("/v1/web/auth/logout", requireWeb, async (request: WebRequest, response: Response, next: NextFunction) => {
@@ -314,9 +315,8 @@ export function registerWebRoutes(
     const id = typeof (payload as any).id === "string" ? (payload as any).id.trim() : "";
     const businessDate = typeof (payload as any).businessDate === "string" ? (payload as any).businessDate : "";
     if (!id || id.length > 96 || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "정산 ID 또는 영업일 형식이 올바르지 않습니다." });
-    const createdBy = (payload as any).createdBy;
-    if (!createdBy || typeof createdBy !== "object") return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy가 필요합니다." });
-    if (user.role === "employee" && createdBy.id !== user.staffId) return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 본인 정산만 작성할 수 있습니다." });
+    const suppliedCreatedBy = (payload as any).createdBy;
+    if (suppliedCreatedBy !== undefined && (typeof suppliedCreatedBy !== "object" || suppliedCreatedBy === null)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy 형식이 올바르지 않습니다." });
     const lotteryItems = (payload as any).lotteryItems;
     if (lotteryItems !== undefined) {
       if (!Array.isArray(lotteryItems)) return response.status(400).json({ code: "INVALID_LOTTERY_ITEMS", message: "복권 재고 데이터 형식이 올바르지 않습니다." });
@@ -330,7 +330,6 @@ export function registerWebRoutes(
       (payload as any).preWorkReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.preWorkReturn }));
       (payload as any).onDutyReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.onDutyReturn }));
     }
-    if (user.role === "employee" && createdBy.role !== undefined && createdBy.role !== "employee") return response.status(403).json({ code: "WEB_AUTHOR_FORBIDDEN", message: "직원은 직원 역할의 본인 정산만 작성할 수 있습니다." });
     const requestedStatus = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
     const status = user.role === "employee"
       ? (["draft", "submitted"].includes(requestedStatus) ? requestedStatus : "draft")
@@ -401,6 +400,11 @@ export function registerWebRoutes(
       const events = Array.isArray(payload.approvalEvents) ? payload.approvalEvents : [];
       events.push({ status: nextStatus, actor: { id: user.staffId, name: user.staffName, role: "admin" }, createdAt: now });
       payload.approvalEvents = events;
+      payload.approvedAt = nextStatus === "manager_approved" ? now : payload.approvedAt;
+      payload.approvedBy = nextStatus === "manager_approved" ? { id: user.staffId, name: user.staffName, role: "admin" } : payload.approvedBy;
+      // This event is written in the same transaction as the settlement status change so
+      // other clients can pull the approval immediately from the shared sync store.
+      payload.syncState = "server_synced";
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
       await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: "admin" }, status: nextStatus })]);
       await connection.commit();
