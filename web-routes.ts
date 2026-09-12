@@ -347,7 +347,11 @@ export function registerWebRoutes(
       }
       if (existing && existing.settlement_status !== "draft" && user.role === "employee") {
         await connection.rollback();
-        return response.status(409).json({ code: "WEB_SETTLEMENT_LOCKED", message: "승인 완료된 정산은 직원이 수정할 수 없습니다." });
+        return response.status(409).json({ code: "WEB_SETTLEMENT_LOCKED", message: "승인요청·승인·반려 처리된 정산은 직원이 수정할 수 없습니다." });
+      }
+      if (existing && updatedAt <= existing.updated_at) {
+        await connection.rollback();
+        return response.status(409).json({ code: "WEB_SETTLEMENT_STALE", message: "더 최신 정산 데이터가 이미 저장되어 있습니다. 새로고침 후 다시 시도하세요." });
       }
       const finalAuthorId = existing?.author_id ?? user.staffId;
       const finalAuthorName = existing?.author_name ?? (typeof createdBy.name === "string" ? createdBy.name : user.username);
