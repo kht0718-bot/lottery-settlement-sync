@@ -25,7 +25,7 @@ if (tokenSecret.length < 32) throw new Error("TOKEN_SECRET은 32자 이상이어
 const port = Number(process.env.PORT ?? 3000);
 const configuredJsonLimit = process.env.JSON_BODY_LIMIT ?? "40mb";
 if (!/^\d+(?:kb|mb)$/i.test(configuredJsonLimit)) throw new Error("JSON_BODY_LIMIT은 예: 1mb 또는 40mb 형식이어야 합니다.");
-const maxDevices = 10; // 활성 등록 기기는 정확히 10대로 고정
+const maxDevices = 5; // 관리자 포함 총 5명(관리자 1 + 직원 4) 기준
 const adminApiToken = required("ADMIN_API_TOKEN");
 const configuredConnectionLimit = Number(process.env.DB_CONNECTION_LIMIT ?? 10);
 const dbConnectionLimit = Number.isFinite(configuredConnectionLimit) ? Math.min(50, Math.max(1, Math.floor(configuredConnectionLimit))) : 10;
