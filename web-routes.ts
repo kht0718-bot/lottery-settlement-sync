@@ -262,6 +262,36 @@ export function registerWebRoutes(
     } catch (error) { next(error); }
   });
 
+  app.post("/v1/web/admin/staff", requireWeb, requireAdmin, async (request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+      if (!name) return response.status(400).json({ code: "INVALID_STAFF_NAME", message: "직원 이름을 입력해 주세요." });
+      const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM settlement_staff WHERE role='employee' AND status='active' AND deletedAt IS NULL");
+      if (Number(countRows[0]?.count ?? 0) >= 4) return response.status(409).json({ code: "STAFF_LIMIT", message: "관리자 포함 총 5명(직원 4명)까지 등록할 수 있습니다." });
+      const now = Date.now(), id = crypto.randomUUID();
+      await pool.execute(
+        "INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,NULL)",
+        [id, name, null, "employee", "active", 1, now, now]
+      );
+      response.status(201).json({ id, name, role: "employee", status: "active" });
+    } catch (error) { next(error); }
+  });
+
+  app.delete("/v1/web/admin/staff/:id", requireWeb, requireAdmin, async (request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      const staffId = request.params.id;
+      const [rows] = await pool.query<Array<{ id: string; role: WebRole }>>("SELECT id, role FROM settlement_staff WHERE id=? AND deletedAt IS NULL LIMIT 1", [staffId]);
+      const staff = rows[0];
+      if (!staff) return response.status(404).json({ code: "STAFF_NOT_FOUND", message: "직원을 찾을 수 없습니다." });
+      if (staff.role === "admin") return response.status(400).json({ code: "ADMIN_DELETE_FORBIDDEN", message: "관리자 계정은 직원 관리에서 삭제할 수 없습니다." });
+      const now = Date.now();
+      await pool.execute("UPDATE settlement_staff SET status='deleted', deletedAt=?, updatedAt=? WHERE id=?", [now, now, staffId]);
+      await pool.execute("UPDATE web_users SET active=FALSE, updatedAt=? WHERE staffId=?", [now, staffId]);
+      await pool.execute("DELETE FROM web_sessions WHERE userId IN (SELECT id FROM web_users WHERE staffId=?)", [staffId]);
+      response.json({ ok: true, staffId });
+    } catch (error) { next(error); }
+  });
+
   app.get("/v1/web/admin/staff", requireWeb, requireAdmin, async (_request: WebRequest, response: Response, next: NextFunction) => {
     try {
       const [rows] = await pool.query<Array<{ id: string; name: string; role: WebRole; status: string; webUsername: string | null; webActive: boolean | null }>>(
