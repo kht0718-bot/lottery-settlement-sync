@@ -17,15 +17,17 @@
 - Admin: dashboard summary, employee management, registered device management, pending employee settlements, detail/evidence review, approve/reject.
 - Settlement detail: pre/post inputs, returns/inventory, amount breakdown, bank transfers, evidence photos, handover, approval history.
 
-## Current web parity failures verified before editing
-1. Admin home can be blank because the current web hides the only create card for admins and has no APK-style admin home dashboard.
-2. Current web uses one combined `새 정산` form instead of separate APK `근무 전 정산` and `근무 후 정산` workflows.
-3. Current web top navigation does not match the APK tab structure.
-4. Current web has no dedicated inventory screen equivalent to the APK inventory tab.
-5. Current web does not reproduce the APK home metrics, active-shift resume logic, latest settlement card, or offline-first status.
-6. Current web admin management is reduced to a staff list and does not yet match the APK employee/device management dashboard.
-7. Current web settlement detail is reduced and does not yet expose the full APK pre/post, amount, handover, evidence and approval-history structure.
-8. Printed-lottery inventory/returns are represented as a generic repeated form and are not yet organized as the APK's dedicated pre/post inventory workflow.
+## Current web parity status (2026-09-14 audit)
+1. Admin home: partially corrected (admin quick actions and sync entry added), but full APK dashboard metrics/latest-settlement/active-work resume still need parity verification.
+2. Admin settlement workflow: controls for 근무 전 / 근무 후 / 승인 were added, but the underlying separate pre/post data flow must still be verified end-to-end.
+3. Navigation: web screen grouping still requires a full APK bottom-tab parity check for 홈 / 내역 / 재고 / 관리.
+4. Inventory: product/draw and return UI exists, and Lotto645 is absent from the current web strings, but dedicated APK-style inventory presentation and record-derived stock verification remain open.
+5. Home metrics: saved count, pending count, latest settlement, active-work resume and offline/sync status require explicit end-to-end parity verification.
+6. Admin management: 직원 관리, 등록기기 관리 and 등록삭제 were added; each action still requires live API verification.
+7. Settlement detail: photo zoom was added; complete pre/post, return/inventory, amount, handover and approval-history parity remains open.
+8. Printed-lottery pre/post: return-related UI exists, but the full pre-shift/post-shift inventory workflow must be verified against actual saved settlement data.
+9. Employee mode: employee home, pairing/sync state, pre/post workflow, approval request and newest-first history remain open for parity verification.
+10. Regression gate: no feature is parity-complete until menu visibility, click behavior, save/reload, data reflection and role-specific visibility are all verified.
 
 ## Safety rules
 - Do not modify `main`.
