@@ -35,3 +35,9 @@
 - Do not modify production services.
 - Make parity changes only on `web-phase5-apk-source-parity`, then test on the Render test service.
 - Do not mark a feature as parity-complete until its web behavior is verified against the APK baseline.
+
+
+## Newly verified blocking parity issue
+- **근무 전 저장이 현재 localStorage 전용**이다. savePreShift()가 서버 정산 초안이 아니라 브라우저의 lotteryPreShift:<staffId>에만 저장한다. 따라서 다른 iPhone/PC/Android 브라우저에서 이어하기가 불가능하고, 공용 서버 동기화 기준 APK 동작과 일치하지 않는다.
+- 근무 후 최종 제출 시에만 서버에 submitted 정산이 생성된다. APK 기준의 근무 전 → 근무 후 → 승인 흐름을 웹에서도 공용 데이터로 보장하려면 근무 전 단계부터 서버 초안/진행중 정산으로 저장·복원하도록 수정이 필요하다.
+- 이 항목은 메뉴 표시 문제가 아니라 데이터 흐름 차이이므로 **P0 차단 항목**으로 처리한다.
