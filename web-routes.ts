@@ -243,6 +243,25 @@ export function registerWebRoutes(
     } catch (error) { next(error); }
   });
 
+  app.get("/v1/web/admin/devices", requireWeb, requireAdmin, async (_request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      const now = Date.now();
+      await pool.execute("DELETE FROM web_sessions WHERE expiresAt<=?", [now]);
+      const [rows] = await pool.query<Array<{ id: string; staffId: string; staffName: string; username: string; createdAt: number; lastSeenAt: number; expiresAt: number }>>(
+        "SELECT ws.id, wu.staffId, ss.name AS \"staffName\", wu.username, ws.createdAt, ws.lastSeenAt, ws.expiresAt FROM web_sessions ws JOIN web_users wu ON wu.id=ws.userId LEFT JOIN settlement_staff ss ON ss.id=wu.staffId WHERE ws.expiresAt>? ORDER BY ws.lastSeenAt DESC",
+        [now]
+      );
+      response.json({ devices: rows });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/v1/web/admin/devices/:id", requireWeb, requireAdmin, async (request: WebRequest, response: Response, next: NextFunction) => {
+    try {
+      await pool.execute("DELETE FROM web_sessions WHERE id=?", [request.params.id]);
+      response.json({ ok: true });
+    } catch (error) { next(error); }
+  });
+
   app.get("/v1/web/admin/staff", requireWeb, requireAdmin, async (_request: WebRequest, response: Response, next: NextFunction) => {
     try {
       const [rows] = await pool.query<Array<{ id: string; name: string; role: WebRole; status: string; webUsername: string | null; webActive: boolean | null }>>(
