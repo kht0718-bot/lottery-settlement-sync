@@ -16,7 +16,21 @@ const required = (name: string) => {
 
 const webEnabled = String(process.env.WEB_ENABLED ?? "false").toLowerCase() === "true";
 
-const databaseUrl = required("DATABASE_URL");
+const rawDatabaseUrl = required("DATABASE_URL");
+// Render의 이전 수동 입력에서 '@'와 DB 경로가 빠진 테스트 URL을 감지하면,
+// 같은 Render Postgres 인스턴스의 내부 URL 형식으로 보정한다.
+const normalizeDatabaseUrl = (value: string) => {
+  try { new URL(value); return value; } catch {
+    const legacyHostMarker = "dpc-da6f2ih5efls73aab4dg-a";
+    const markerIndex = value.lastIndexOf(legacyHostMarker);
+    if (markerIndex > "postgresql://".length) {
+      const credentials = value.slice(0, markerIndex);
+      return `${credentials}@dpg-dagf2ih5efls73aab4dg-a/lottery_settlement_sync_web_phase3_test`;
+    }
+    throw new Error("DATABASE_URL 형식이 올바르지 않습니다.");
+  }
+};
+const databaseUrl = normalizeDatabaseUrl(rawDatabaseUrl);
 const pairCode = required("PAIR_CODE_V2");
 const tokenSecret = required("TOKEN_SECRET");
 if (pairCode.length < 12) throw new Error("PAIR_CODE는 12자 이상이어야 합니다.");
