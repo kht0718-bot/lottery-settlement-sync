@@ -72,7 +72,6 @@ export function registerWebRoutes(
     return;
   }
 
-
   // Test-only first-admin bootstrap. It is disabled unless explicitly enabled by Render.
   // The retry handles route registration occurring before asynchronous schema creation completes.
   if (process.env.WEB_TEST_AUTO_BOOTSTRAP === "true") {
@@ -175,7 +174,6 @@ export function registerWebRoutes(
     }).catch(next);
   };
 
-
   app.post("/v1/web/bootstrap", async (request: Request, response: Response, next: NextFunction) => {
     try {
       const suppliedToken = request.header("x-admin-token") ?? "";
@@ -229,7 +227,7 @@ export function registerWebRoutes(
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
       const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=TRUE");
-      if (Number(countRows[0]?.count ?? 0) >= 10) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 최대 10개입니다." });
+      if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 최대 5개입니다." });
       const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
       const staff = staffRows[0];
       if (!staff || staff.status !== "active" || staff.role !== role) return response.status(400).json({ code: "INVALID_STAFF", message: "활성 직원 정보와 역할이 일치해야 합니다." });
@@ -326,12 +324,12 @@ export function registerWebRoutes(
       const password = typeof request.body?.password === "string" ? request.body.password : "";
       if (!username || !password) return response.status(400).json({ code: "INVALID_LOGIN", message: "아이디와 비밀번호가 필요합니다." });
       const [rows] = await pool.query<WebUserRow[]>(
-        "SELECT wu.id, wu.staffid AS \"staffId\", ss.name AS \"staffName\", wu.username, wu.passwordhash AS \"passwordHash\", wu.role, wu.active FROM web_users wu JOIN settlement_staff ss ON ss.id=wu.staffid WHERE wu.username=? AND ss.status=\'active\' AND ss.deletedAt IS NULL LIMIT 1",
+        "SELECT wu.id, wu.staffid AS \"staffId\", ss.name AS \"staffName\", wu.username, wu.passwordhash AS \"passwordHash\", wu.role, wu.active FROM web_users wu JOIN settlement_staff ss ON ss.id=wu.staffid WHERE wu.username=? AND ss.status='active' AND ss.deletedAt IS NULL LIMIT 1",
         [username]
       );
       const user = rows[0];
       if (!user || !user.active || !verifyPassword(password, user.passwordHash)) {
-        return response.status(401).json({ code: "LOGIN_FAILED", message: "아이디 또는 비밀번호가 올바르지 않습니다." });
+        return response.status(401).json({ code: "LOGIN_FAILED", message: "아이디와 비밀번호가 올바르지 않습니다." });
       }
       const token = crypto.randomBytes(48).toString("base64url");
       const now = Date.now();
@@ -462,7 +460,6 @@ export function registerWebRoutes(
   };
   app.post("/v1/web/settlements/:id/approve", requireWeb, transitionSettlement("manager_approved"));
   app.post("/v1/web/settlements/:id/reject", requireWeb, transitionSettlement("rejected"));
-
 
   app.get("/v1/web/settlements", requireWeb, async (request: WebRequest, response: Response, next: NextFunction) => {
     try {
