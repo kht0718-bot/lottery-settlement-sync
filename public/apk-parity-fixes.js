@@ -74,8 +74,10 @@
   const refreshActiveSettlementView=()=>{
     try{
       const visible=id=>{const el=document.getElementById(id);return !!el&&!el.classList.contains('hidden');};
-      if(visible('homeView'))document.querySelector('[data-view="home"]')?.click();
-      else if(visible('historyView'))document.getElementById('refreshBtn')?.click();
+      if(visible('homeView')){
+        if(typeof renderHomeDashboard==='function')void renderHomeDashboard();
+        else document.querySelector('[data-view="home"]')?.click();
+      }else if(visible('historyView'))document.getElementById('refreshBtn')?.click();
       else if(visible('inventoryView'))document.getElementById('refreshInventoryBtn')?.click();
       else if(visible('approvalView')&&window.__LOTTERY_WEB_ROLE__==='admin')document.getElementById('manageApprovalBtn')?.click();
     }catch{}
