@@ -13,6 +13,7 @@
     }catch{}
   };
   const num=v=>Math.max(0,Number(v||0));
+  const drawNumber=v=>{const m=String(v??'').match(/\d+/);return m?Number(m[0]):Number.POSITIVE_INFINITY;};
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const api=async path=>{
     const token=localStorage.getItem('webToken')||'';
@@ -58,7 +59,7 @@
       }
       const groups=products.map(product=>({
         product,
-        rows:[...latest.values()].filter(v=>v.item.product===product).sort((a,b)=>String(a.item.draw||'').localeCompare(String(b.item.draw||''),'ko'))
+        rows:[...latest.values()].filter(v=>v.item.product===product).sort((a,b)=>{const an=drawNumber(a.item.draw),bn=drawNumber(b.item.draw);return an===bn?String(a.item.draw||'').localeCompare(String(b.item.draw||''),'ko'):an-bn;})
       })).filter(g=>g.rows.length);
       root.innerHTML=groups.length?groups.map(g=>'<section class="card"><h3>'+esc(g.product)+'</h3><div class="grid">'+g.rows.map(v=>{
         const i=v.item;
