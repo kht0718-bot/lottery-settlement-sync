@@ -17,31 +17,34 @@
 - Admin: dashboard summary, employee management, registered device management, pending employee settlements, detail/evidence review, approve/reject.
 - Settlement detail: pre/post inputs, returns/inventory, amount breakdown, bank transfers, evidence photos, handover, approval history.
 
-## Current web parity status (2026-09-14 audit)
-1. Admin home: partially corrected (admin quick actions and sync entry added), but full APK dashboard metrics/latest-settlement/active-work resume still need parity verification.
-2. Admin settlement workflow: controls for 근무 전 / 근무 후 / 승인 were added, but the underlying separate pre/post data flow must still be verified end-to-end.
-3. Navigation: web screen grouping still requires a full APK bottom-tab parity check for 홈 / 내역 / 재고 / 관리.
-4. Inventory: product/draw and return UI exists, and Lotto645 is absent from the current web strings, but dedicated APK-style inventory presentation and record-derived stock verification remain open.
-5. Home metrics: saved count, pending count, latest settlement, active-work resume and offline/sync status require explicit end-to-end parity verification.
-6. Admin management: 직원 관리, 등록기기 관리 and 등록삭제 were added; each action still requires live API verification.
-7. Settlement detail: photo zoom was added; complete pre/post, return/inventory, amount, handover and approval-history parity remains open.
-8. Printed-lottery pre/post: return-related UI exists, but the full pre-shift/post-shift inventory workflow must be verified against actual saved settlement data.
-9. Employee mode: employee home, pairing/sync state, pre/post workflow, approval request and newest-first history remain open for parity verification.
-10. Regression gate: no feature is parity-complete until menu visibility, click behavior, save/reload, data reflection and role-specific visibility are all verified.
+## Current web parity status
+1. Admin home: partially corrected (admin quick actions and sync entry added), but full APK dashboard metrics/latest-settlement/active-work resume still need live parity verification.
+2. Admin settlement workflow: controls for 근무 전 / 근무 후 / 승인 exist; underlying separate pre/post data flow still requires live end-to-end verification.
+3. Navigation: web has 홈 / 내역 / 재고 / 관리; exact APK click/visibility behavior still requires live verification.
+4. Inventory: product/draw and return UI exists. Inventory now derives each product/draw from the latest approved settlement state instead of cumulatively adding historical settlements. Dedicated APK-style presentation and live record verification remain open.
+5. Printed-lottery return flow: web now explicitly relates product + draw + return quantity and displays the resulting adjusted/current stock. Server validation also persists `preWorkReturns` and `onDutyReturns`; return quantities do not enter sales quantity. Live APK comparison remains required.
+6. Home metrics: saved count, pending count, latest settlement, active-work resume and offline/sync status require live verification.
+7. Admin management: 직원 관리, 등록기기 관리 and 등록삭제 exist. Employee count is limited to 4 active employees, matching the administrator + 4 employees target. Live API verification remains open.
+8. Settlement detail: photo zoom exists; complete pre/post, return/inventory, amount, handover and approval-history parity remains open.
+9. Photo evidence: web/server limit is 8 images, matching the current requirement.
+10. Employee mode: employee home, pairing/sync state, pre/post workflow, approval request and newest-first history remain open for live parity verification.
+11. Regression gate: no feature is parity-complete until menu visibility, click behavior, save/reload, data reflection and role-specific visibility are verified.
+
+## Current data-flow checks
+- Web login/session uses server-side `web_users` and `web_sessions`.
+- Web settlement writes use the authenticated staff identity as the canonical `createdBy` identity rather than trusting an arbitrary browser-supplied name.
+- Settlement writes validate printed-lottery quantities and the flow `originalStock -> preWorkReturn -> adjustedStock -> restock -> onDutyReturn -> availableStock -> endingStock`.
+- Attachments are limited to 8 images and validated as image data URLs.
+- Employee settlement editing is restricted to the employee's own draft; submitted/approved/rejected records are locked for employee editing.
+- Admin approval/rejection and cross-device propagation still require live verification.
 
 ## Safety rules
 - Do not modify `main`.
 - Do not modify the Android APK.
 - Do not modify production services.
-- Make parity changes only on `web-phase5-apk-source-parity`, then test on the Render test service.
+- Make parity changes only on `web-phase5-apk-source-parity`, then test on the Render test service when the workspace is available.
 - Do not mark a feature as parity-complete until its web behavior is verified against the APK baseline.
-
-
-## Newly verified blocking parity issue
-- **근무 전 저장이 현재 localStorage 전용**이다. savePreShift()가 서버 정산 초안이 아니라 브라우저의 lotteryPreShift:<staffId>에만 저장한다. 따라서 다른 iPhone/PC/Android 브라우저에서 이어하기가 불가능하고, 공용 서버 동기화 기준 APK 동작과 일치하지 않는다.
-- 근무 후 최종 제출 시에만 서버에 submitted 정산이 생성된다. APK 기준의 근무 전 → 근무 후 → 승인 흐름을 웹에서도 공용 데이터로 보장하려면 근무 전 단계부터 서버 초안/진행중 정산으로 저장·복원하도록 수정이 필요하다.
-- 이 항목은 메뉴 표시 문제가 아니라 데이터 흐름 차이이므로 **P0 차단 항목**으로 처리한다.
-
+- Render workspace is currently unavailable; do not attempt Render operations until the user makes it available.
 
 ## Governing parity rule
 - **기준은 검증 완료된 Android APK 하나로 고정한다.** 웹은 독립적인 제품 사양이나 기존 웹 구조를 기준으로 판단하지 않는다.
