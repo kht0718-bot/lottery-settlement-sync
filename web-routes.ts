@@ -229,7 +229,9 @@ export function registerWebRoutes(
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
       const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=TRUE");
-      if (Number(countRows[0]?.count ?? 0) >= 10) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 최대 10개입니다." });
+      // Browser logins represent the same roster as the APK: one administrator
+      // and up to four employees. They must not create a sixth active person.
+      if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 관리자 1명과 직원 4명, 총 5명까지입니다." });
       const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
       const staff = staffRows[0];
       if (!staff || staff.status !== "active" || staff.role !== role) return response.status(400).json({ code: "INVALID_STAFF", message: "활성 직원 정보와 역할이 일치해야 합니다." });
