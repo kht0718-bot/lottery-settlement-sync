@@ -71,9 +71,19 @@
       }).join('')+'</div></section>').join(''):'승인된 재고 기록이 없습니다.';
     }catch(e){root.textContent=e.message||'재고를 불러오지 못했습니다.';}
   };
+  const refreshActiveSettlementView=()=>{
+    try{
+      const visible=id=>{const el=document.getElementById(id);return !!el&&!el.classList.contains('hidden');};
+      if(visible('homeView'))document.querySelector('[data-view="home"]')?.click();
+      else if(visible('historyView'))document.getElementById('refreshBtn')?.click();
+      else if(visible('inventoryView'))document.getElementById('refreshInventoryBtn')?.click();
+      else if(visible('approvalView')&&window.__LOTTERY_WEB_ROLE__==='admin')document.getElementById('manageApprovalBtn')?.click();
+    }catch{}
+  };
   const observer=new MutationObserver(()=>{markRole();decorateSettlementForm();});
   observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true});
   setTimeout(()=>{markRole();decorateSettlementForm();},0);
   setTimeout(()=>{markRole();decorateSettlementForm();},300);
   setTimeout(()=>{markRole();decorateSettlementForm();},1000);
+  setInterval(()=>{if(document.visibilityState==='visible'&&localStorage.getItem('webToken'))refreshActiveSettlementView();},10000);
 })();
