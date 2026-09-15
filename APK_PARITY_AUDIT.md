@@ -5,7 +5,7 @@
 - APK app name: `복권 정산`
 - APK version: `1.0.2`
 - Android package: `com.app.lotterysettlementapp`
-- The previously archived React Native source has matching app name, version, package and Expo configuration, so it is used only to inspect the screen/workflow structure corresponding to the APK baseline.
+- Verified APK SHA-256 (uploaded baseline): `abd4a3615724d6408c74a2f8e705549148a0eb6303546e861a27891d99ac06e7`
 
 ## Verified APK screen/workflow structure
 - Bottom tabs: 홈 / 내역 / 재고 / 관리
@@ -17,35 +17,33 @@
 - Admin: dashboard summary, employee management, registered device management, pending employee settlements, detail/evidence review, approve/reject.
 - Settlement detail: pre/post inputs, returns/inventory, amount breakdown, bank transfers, evidence photos, handover, approval history.
 
-## Current web parity status (2026-09-14 audit)
-1. Admin home: partially corrected (admin quick actions and sync entry added), but full APK dashboard metrics/latest-settlement/active-work resume still need parity verification.
-2. Admin settlement workflow: controls for 근무 전 / 근무 후 / 승인 were added, but the underlying separate pre/post data flow must still be verified end-to-end.
-3. Navigation: web screen grouping still requires a full APK bottom-tab parity check for 홈 / 내역 / 재고 / 관리.
-4. Inventory: product/draw and return UI exists, and Lotto645 is absent from the current web strings, but dedicated APK-style inventory presentation and record-derived stock verification remain open.
-5. Home metrics: saved count, pending count, latest settlement, active-work resume and offline/sync status require explicit end-to-end parity verification.
-6. Admin management: 직원 관리, 등록기기 관리 and 등록삭제 were added; each action still requires live API verification.
-7. Settlement detail: photo zoom was added; complete pre/post, return/inventory, amount, handover and approval-history parity remains open.
-8. Printed-lottery pre/post: return-related UI exists, but the full pre-shift/post-shift inventory workflow must be verified against actual saved settlement data.
-9. Employee mode: employee home, pairing/sync state, pre/post workflow, approval request and newest-first history remain open for parity verification.
-10. Regression gate: no feature is parity-complete until menu visibility, click behavior, save/reload, data reflection and role-specific visibility are all verified.
+## Web implementation audit
+- Web bottom navigation is 홈 / 내역 / 재고 / 관리.
+- Web currently contains server-backed pre-shift draft save/resume rather than relying only on browser localStorage; localStorage is retained only as a fallback/cache.
+- Printed-lottery inventory is represented by product + draw and separates opening stock, pre-shift return, in-duty receipt/return, and ending stock.
+- Pre-shift return calculation is `opening stock - pre-shift return`; return quantity is carried in settlement data and is not added to sales amount.
+- Approval/history/detail paths use settlement status and updated timestamp ordering with newest records first.
+- Admin-only approval, staff management, and device-management controls are role gated.
+- Evidence upload is capped at 8 photos and detail view supports zoom.
+
+## Remaining verification gate
+1. Full APK-to-web screen/order comparison on the uploaded APK.
+2. Live verification of pre-shift save -> post-shift resume across a second browser/device.
+3. Live verification of return -> inventory -> settlement detail -> approval -> history reflection.
+4. Live verification of employee add/delete and role-specific visibility.
+5. Live verification after refresh/re-login and after admin approval.
+6. Render deployment verification on the dedicated test service.
 
 ## Safety rules
 - Do not modify `main`.
-- Do not modify the Android APK.
+- Do not modify the Android APK or any existing Android code.
 - Do not modify production services.
-- Make parity changes only on `web-phase5-apk-source-parity`, then test on the Render test service.
-- Do not mark a feature as parity-complete until its web behavior is verified against the APK baseline.
-
-
-## Newly verified blocking parity issue
-- **근무 전 저장이 현재 localStorage 전용**이다. savePreShift()가 서버 정산 초안이 아니라 브라우저의 lotteryPreShift:<staffId>에만 저장한다. 따라서 다른 iPhone/PC/Android 브라우저에서 이어하기가 불가능하고, 공용 서버 동기화 기준 APK 동작과 일치하지 않는다.
-- 근무 후 최종 제출 시에만 서버에 submitted 정산이 생성된다. APK 기준의 근무 전 → 근무 후 → 승인 흐름을 웹에서도 공용 데이터로 보장하려면 근무 전 단계부터 서버 초안/진행중 정산으로 저장·복원하도록 수정이 필요하다.
-- 이 항목은 메뉴 표시 문제가 아니라 데이터 흐름 차이이므로 **P0 차단 항목**으로 처리한다.
-
+- Make parity changes on the Phase 5 parity branch and verify on the Render test service.
+- Do not mark a feature parity-complete until menu visibility, click behavior, save/reload, data reflection, and role-specific visibility are verified against the APK.
 
 ## Governing parity rule
-- **기준은 검증 완료된 Android APK 하나로 고정한다.** 웹은 독립적인 제품 사양이나 기존 웹 구조를 기준으로 판단하지 않는다.
-- 메뉴, 화면, 버튼, 표시 순서, 업무 흐름, 권한별 노출, 저장/수정/삭제 동작, 반품·재고·승인 데이터 반영은 APK 동작을 기준값으로 한다.
-- 웹 전용 기능은 APK 기준 업무 기능과 충돌하지 않는 기술적 표현 차이(브라우저 사진 선택 등)만 허용한다. APK에 없는 별도 업무 메뉴를 임의로 추가하지 않는다.
-- 차이가 발견되면 APK를 바꾸는 것이 아니라 **웹을 수정한다. Android APK와 기존 Android 코드는 변경 금지**.
-- 이전에 검토 완료된 정산 프로세스는 재설계하지 않고 APK 구현을 그대로 웹에 맞춘다.
+- **The verified Android APK is the sole source of truth.**
+- Menus, screens, order, buttons, workflow, permissions, save/edit/delete behavior, returns, inventory, approval, history, and settlement detail must follow the APK.
+- Browser-specific differences are limited to technical presentation/input differences such as photo selection.
+- If a mismatch is found, modify the web only. Android APK and existing Android code are never modified.
+- Do not invent APK-absent business menus or redesign already-validated settlement processes.
