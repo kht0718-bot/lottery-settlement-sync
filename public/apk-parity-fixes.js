@@ -40,37 +40,6 @@
     add(duty,'<div class="apk-parity-help apk-return-row"><b>근무 중 입고 / 반품</b><br>반품은 해당 품목·회차 재고만 차감합니다.</div>');
     add(end,'<div class="apk-parity-help">마감 재고도 동일한 품목·회차 기준으로 입력합니다.</div>');
   };
-  window.loadInventory=async()=>{
-    const root=document.getElementById('inventoryList');
-    if(!root)return;
-    root.textContent='불러오는 중...';
-    try{
-      const d=await api('/v1/web/settlements?limit=500');
-      const latest=new Map();
-      for(const x of d.settlements||[]){
-        if(x.status!=='manager_approved')continue;
-        const updated=Number(x.updatedAt||0);
-        for(const i of x.payload?.lotteryItems||[]){
-          if(!products.includes(i.product))continue;
-          const key=String(i.product)+'|'+String(i.draw||'');
-          const old=latest.get(key);
-          if(!old||updated>old.updated)latest.set(key,{updated,item:i});
-        }
-      }
-      const groups=products.map(product=>({
-        product,
-        rows:[...latest.values()].filter(v=>v.item.product===product).sort((a,b)=>{const an=drawNumber(a.item.draw),bn=drawNumber(b.item.draw);return an===bn?String(a.item.draw||'').localeCompare(String(b.item.draw||''),'ko'):an-bn;})
-      })).filter(g=>g.rows.length);
-      root.innerHTML=groups.length?groups.map(g=>'<section class="card"><h3>'+esc(g.product)+'</h3><div class="grid">'+g.rows.map(v=>{
-        const i=v.item;
-        const original=num(i.originalStock),pre=num(i.preWorkReturn),restock=num(i.restock),onDuty=num(i.onDutyReturn),ending=num(i.endingStock);
-        const adjusted=Math.max(0,original-pre);
-        const available=Math.max(0,adjusted+restock-onDuty);
-        const sold=Math.max(0,available-ending);
-        return '<div class="stock-card"><div class="apk-stock-title">'+esc(i.draw||'회차 미입력')+'</div><div class="stock-summary">원재고 '+original+'장 → 근무 전 반품 <b>'+pre+'장</b> → 반영 재고 <b>'+adjusted+'장</b><br>입고 '+restock+'장 · 근무 중 반품 '+onDuty+'장<br>판매가능 '+available+'장 · 마감 '+ending+'장 · 판매 '+sold+'장</div><div class="apk-stock-current"><b>현재 재고: '+ending+'장</b></div></div>'
-      }).join('')+'</div></section>').join(''):'승인된 재고 기록이 없습니다.';
-    }catch(e){root.textContent=e.message||'재고를 불러오지 못했습니다.';}
-  };
   const refreshActiveSettlementView=()=>{
     try{
       const visible=id=>{const el=document.getElementById(id);return !!el&&!el.classList.contains('hidden');};
