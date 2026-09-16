@@ -1,4 +1,399 @@
-const state={token:localStorage.getItem("webToken")||"",user:null,attachments:[]};const $=id=>document.getElementById(id);const api=async(path,options={})=>{const headers={...(options.headers||{})};if(state.token)headers.Authorization="Bearer "+state.token;if(options.body&&!headers["Content-Type"])headers["Content-Type"]="application/json";const r=await fetch(path,{...options,headers});const data=await r.json().catch(()=>({}));if(!r.ok){if(r.status===401){localStorage.removeItem("webToken");state.token="";state.user=null;if($("appView"))$("appView").classList.add("hidden");if($("loginView"))$("loginView").classList.remove("hidden")}throw new Error(data.message||"요청에 실패했습니다.")}return data};const esc=v=>escapeHtml(v==null?"":String(v));const msg=(id,text,cls="")=>{const e=$(id);e.textContent=text;e.className=cls||"muted"};const num=v=>Math.max(0,Number(v||0));const LOTTERY_PRODUCTS=["스피또500","스피또1000","스피또2000","연금복권"];function lotteryOptions(product){const p=LOTTERY_PRODUCTS.includes(String(product||""))?String(product):LOTTERY_PRODUCTS[1];return LOTTERY_PRODUCTS.map(x=>'<option value="'+x+'"'+(x===p?' selected':'')+'>'+x+'</option>').join("")}function rowKey(d){return String(d.product||"")+"|"+String(d.draw||"")}function inventoryRow(kind,data={}){const id=kind+"-"+Date.now()+Math.random().toString(36).slice(2),product=String(data.product||"스피또1000");let body="";if(kind==="stock")body='<label>품목<select data-k="product">'+lotteryOptions(product)+'</select></label><label>회차<input data-k="draw" value="'+escapeHtml(data.draw||"")+'" placeholder="예: 109회"></label><label>초기 재고<input data-k="originalStock" type="number" min="0" value="'+num(data.originalStock)+'"></label>';if(kind==="preReturn")body='<label>품목<select data-k="product">'+lotteryOptions(product)+'</select></label><label>회차<input data-k="draw" value="'+escapeHtml(data.draw||"")+'" placeholder="예: 109회"></label><label>반품 수량<input data-k="preWorkReturn" type="number" min="0" value="'+num(data.preWorkReturn)+'"></label>';if(kind==="dutyAdjust")body='<label>품목<select data-k="product">'+lotteryOptions(product)+'</select></label><label>회차<input data-k="draw" value="'+escapeHtml(data.draw||"")+'" placeholder="예: 109회"></label><label>입고<input data-k="restock" type="number" min="0" value="'+num(data.restock)+'"></label><label>근무 중 반품<input data-k="onDutyReturn" type="number" min="0" value="'+num(data.onDutyReturn)+'"></label>';if(kind==="ending")body='<label>품목<select data-k="product">'+lotteryOptions(product)+'</select></label><label>회차<input data-k="draw" value="'+escapeHtml(data.draw||"")+'" placeholder="예: 109회"></label><label>마감 재고<input data-k="endingStock" type="number" min="0" value="'+num(data.endingStock)+'"></label>';return '<div class="stock-card" data-row-kind="'+kind+'" data-row="'+id+'"><div class="stock-grid">'+body+'</div><div class="actions"><button type="button" class="secondary" data-remove-row="'+id+'">삭제</button></div></div>'}function bindRows(){document.querySelectorAll("[data-remove-row]").forEach(b=>b.onclick=()=>b.closest("[data-row]")?.remove())}function addRow(kind,data={}){const root=$(kind==="stock"?"stockItems":kind==="preReturn"?"preReturnItems":kind==="dutyAdjust"?"dutyAdjustItems":"endingStockItems");root.insertAdjacentHTML("beforeend",inventoryRow(kind,data));bindRows()}function readRows(kind){return [...document.querySelectorAll('[data-row-kind="'+kind+'"]')].map(card=>{const x={};card.querySelectorAll("[data-k]").forEach(e=>x[e.dataset.k]=e.value);x.product=String(x.product||"").trim();x.draw=String(x.draw||"").trim();const nums=Object.entries(x).filter(([k])=>k!=="product"&&k!=="draw").some(([,v])=>num(v)!==0);if(!x.draw&&!nums)return null;if(!LOTTERY_PRODUCTS.includes(x.product))throw new Error("인쇄복권 품목이 올바르지 않습니다.");if(!x.draw)throw new Error("회차를 입력해 주세요.");return x}).filter(Boolean)}function mergeStockRows(){const maps={stock:new Map(),pre:new Map(),duty:new Map(),ending:new Map()};for(const [kind,map] of [["stock",maps.stock],["preReturn",maps.pre],["dutyAdjust",maps.duty],["ending",maps.ending]])for(const x of readRows(kind)){const key=rowKey(x);if(map.has(key))throw new Error("같은 항목에 동일 품목과 회차를 중복 등록할 수 없습니다.");map.set(key,x)}const keys=new Set([...maps.stock.keys(),...maps.pre.keys(),...maps.duty.keys(),...maps.ending.keys()]);const rows=[];for(const key of keys){const base=maps.stock.get(key),pre=maps.pre.get(key)||{},duty=maps.duty.get(key)||{},ending=maps.ending.get(key);if(!base)throw new Error("반품·입고·마감 재고는 먼저 같은 품목·회차의 초기 재고를 등록해야 합니다.");if(!ending)throw new Error(base.product+" / "+base.draw+"의 마감 재고를 입력해 주세요.");const original=num(base.originalStock),preReturn=num(pre.preWorkReturn),restock=num(duty.restock),onDutyReturn=num(duty.onDutyReturn),end=num(ending.endingStock);const adjusted=original-preReturn;if(preReturn>original)throw new Error("근무 전 반품은 원재고보다 많을 수 없습니다.");const available=adjusted+restock-onDutyReturn;if(onDutyReturn>adjusted+restock)throw new Error("근무 중 반품은 반품 반영 재고와 입고 합계를 초과할 수 없습니다.");if(end>available)throw new Error("마감 재고는 판매가능 재고보다 많을 수 없습니다.");rows.push({product:base.product,draw:base.draw,originalStock:original,preWorkReturn:preReturn,adjustedStock:adjusted,restock,onDutyReturn,availableStock:available,endingStock:end,soldQuantity:available-end})}return rows}function addStock(data={}){addRow("stock",data);addRow("preReturn",data);addRow("dutyAdjust",data);addRow("ending",data)}function readStock(){return mergeStockRows()}function loadRowsFromItems(items){$("stockItems").innerHTML="";$("preReturnItems").innerHTML="";$("dutyAdjustItems").innerHTML="";$("endingStockItems").innerHTML="";for(const i of items||[]){addRow("stock",i);addRow("preReturn",i);addRow("dutyAdjust",i);addRow("ending",i)}bindRows()}function escapeHtml(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}function calc(item){const original=num(item.originalStock),pre=num(item.preWorkReturn),restock=num(item.restock),onDuty=num(item.onDutyReturn),end=num(item.endingStock);const adjusted=Math.max(0,original-pre),available=Math.max(0,adjusted+restock-onDuty),sold=Math.max(0,available-end);return{original,pre,adjusted,restock,onDuty,available,end,sold}}async function login(e){e.preventDefault();try{const d=await api("/v1/web/auth/login",{method:"POST",body:JSON.stringify({username:$("username").value.trim(),password:$("password").value})});state.token=d.token;state.user=d.user;localStorage.setItem("webToken",state.token);showApp();await loadList()}catch(err){msg("loginMsg",err.message,"error")}}async function restore(){if(!state.token)return;try{const d=await api("/v1/web/auth/me");state.user=d.user;showApp();await loadList()}catch{localStorage.removeItem("webToken");state.token="";state.user=null;showLogin()}}function setView(view){["home","history","inventory","manage","settings","approval","detail"].forEach(v=>{$(v+"View").classList.toggle("hidden",v!==view)});if(view==="history")loadList();if(view==="inventory")loadInventory();if(view==="manage"){loadStaff();$("staffManagePanel")?.classList.remove("hidden");$("deviceManagePanel")?.classList.add("hidden");$("webAccountPanel")?.classList.add("hidden");}if(view==="settings"){$("syncMsg").textContent="현재 서버 데이터 기준으로 새로고침할 수 있습니다."}if(view==="approval"){if(state.user?.role!=="admin"){setView("history");return}loadApprovalList()}}async function renderHomeDashboard(){const message=$("homeDashboardMsg"),metrics=$("homeMetrics"),quick=$("homeQuickMenu");if(!message||!metrics||!quick)return;message.textContent="정산 정보를 불러오는 중...";metrics.innerHTML="";quick.innerHTML="";try{const d=await api("/v1/web/settlements?limit=100");const all=d.settlements||[];const mine=state.user?.role==="admin"?all:all.filter(x=>(x.author?.id||x.createdBy?.id||x.staffId)===state.user?.staffId);const latest=mine.slice().sort((a,b)=>Number(b.updatedAt||0)-Number(a.updatedAt||0))[0];if(state.user?.role==="admin"){message.textContent="관리자 정산 업무를 선택하세요.";quick.innerHTML='<button type="button" data-home-view="manage">관리</button><button type="button" class="secondary" data-home-view="inventory">복권 재고</button><button type="button" class="secondary" data-home-view="history">정산 내역</button>';$("adminShiftWorkflow")?.classList.remove("hidden");$("adminSyncHome")?.classList.remove("hidden")}else{$("adminShiftWorkflow")?.classList.add("hidden");$("adminSyncHome")?.classList.add("hidden");message.textContent=latest?"오늘의 정산 업무를 선택하세요.":"근무 전 정산부터 시작하세요.";quick.innerHTML='<button type="button" data-home-create="1">근무 전 정산 시작</button><button type="button" class="secondary" data-home-view="history">정산 내역</button><button type="button" class="secondary" data-home-view="inventory">복권 재고</button><button type="button" class="secondary" data-home-view="settings">기기 정보</button>'}quick.querySelectorAll("[data-home-view]").forEach(b=>b.onclick=()=>setView(b.dataset.homeView));quick.querySelectorAll("[data-home-create]").forEach(b=>b.onclick=()=>{setView("home");$("createCard")?.scrollIntoView({behavior:"smooth",block:"start"})})}catch(e){message.textContent=e.message||"홈 정보를 불러오지 못했습니다."}}function showApp(){$("loginView").classList.add("hidden");$("appView").classList.remove("hidden");$("userInfo").textContent=state.user.username+" · "+(state.user.role==="admin"?"관리자":"직원");$("createCard").classList.toggle("hidden",state.user.role==="admin");$("manageRoleMsg").textContent="";$("employeeManage").classList.toggle("hidden",state.user.role!=="admin");document.querySelectorAll("[data-view]").forEach(b=>{if(b.dataset.view==="approval")b.classList.toggle("hidden",state.user.role!=="admin");b.onclick=()=>setView(b.dataset.view)});document.querySelectorAll("[data-admin-shift]").forEach(b=>b.onclick=()=>{const action=b.dataset.adminShift;if(action==="approval"){setView("approval");return}$("createCard")?.classList.remove("hidden");setView("home");document.querySelectorAll("[data-shift-view]").forEach(x=>x.classList.toggle("secondary",x.dataset.shiftView!==action));document.querySelectorAll("[data-shift-view]").forEach(x=>{if(x.dataset.shiftView===action)x.click()});$("createCard")?.scrollIntoView({behavior:"smooth",block:"start"})});if($("manageApprovalBtn"))$("manageApprovalBtn").onclick=()=>setView("approval");if($("manageStaffBtn"))$("manageStaffBtn").onclick=()=>{$("staffManagePanel")?.classList.remove("hidden");$("deviceManagePanel")?.classList.add("hidden");$("webAccountPanel")?.classList.add("hidden");loadStaff()};if($("staffForm"))$("staffForm").onsubmit=async e=>{e.preventDefault();try{const name=$("staffName").value.trim();const r=await api("/v1/web/admin/staff",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});$("staffName").value="";msg("staffMsg",(r.name||name)+" 직원을 추가했습니다.","ok");await loadStaff()}catch(e){msg("staffMsg",e.message||"직원을 추가하지 못했습니다.","error")}};if($("manageDeviceBtn"))$("manageDeviceBtn").onclick=()=>{$("staffManagePanel")?.classList.add("hidden");$("webAccountPanel")?.classList.add("hidden");$("deviceManagePanel")?.classList.remove("hidden");loadDevices()};setView("home");restorePreShift();void renderHomeDashboard()}function statusLabel(s){return({draft:"작성중",submitted:"승인대기",manager_approved:"승인",rejected:"반려"})[s]||s}function stockSummary(items){return items.map(i=>'<div class="stock-summary"><b>'+escapeHtml(i.product||"복권")+(i.draw?" / "+escapeHtml(i.draw):"")+'</b><br>원재고 '+num(i.originalStock)+' → 근무 전 반품 '+num(i.preWorkReturn)+' → 반영 재고 <b>'+num(i.adjustedStock)+'장</b><br>입고 '+num(i.restock)+' / 근무 중 반품 '+num(i.onDutyReturn)+' / 판매가능 '+num(i.availableStock)+' / 마감 '+num(i.endingStock)+' / 판매 '+num(i.soldQuantity)+'장</div>').join("")}async function createWebUser(e){e.preventDefault();try{const d=await api("/v1/web/admin/users",{method:"POST",body:JSON.stringify({staffId:$("webStaffId").value.trim(),username:$("webNewUsername").value.trim(),password:$("webNewPassword").value,role:$("webNewRole").value})});$("webNewPassword").value="";msg("webUserMsg",d.username+" 웹 계정을 연결했습니다.","ok");await loadStaff()}catch(err){msg("webUserMsg",err.message||"웹 계정을 연결하지 못했습니다.","error")}}async function loadStaff(){if(state.user?.role!=="admin")return;const target=$("employeeList");if(!target)return;try{const r=await api("/v1/web/admin/staff");target.innerHTML=(r.staff||[]).map(x=>'<div class="card"><b>'+esc(x.name||x.id)+'</b><br><span class="muted">'+esc(x.role==="admin"?"관리자":x.status)+'</span>'+(x.webUsername?' <button class="secondary web-account-toggle" data-staff="'+esc(x.id)+'" data-active="'+(!x.webActive)+'">'+(x.webActive?"웹 사용 중지":"웹 사용 허용")+'</button>':"")+(x.role!=="admin"?'<button class="danger staff-delete" data-staff="'+esc(x.id)+'">직원 삭제</button>':"")+'</div>').join("")||"등록된 직원이 없습니다.";target.querySelectorAll(".web-account-toggle").forEach(b=>b.onclick=async()=>{try{await api("/v1/web/admin/staff/"+encodeURIComponent(b.dataset.staff)+"/web-account",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({active:b.dataset.active==="true"})});await loadStaff()}catch(e){alert(e.message||"변경하지 못했습니다.")}});target.querySelectorAll(".staff-delete").forEach(b=>b.onclick=async()=>{if(!confirm("이 직원을 삭제하시겠습니까? 연결된 웹 계정과 등록 세션도 비활성화됩니다."))return;try{await api("/v1/web/admin/staff/"+encodeURIComponent(b.dataset.staff),{method:"DELETE"});msg("staffMsg","직원을 삭제했습니다.","ok");await loadStaff()}catch(e){msg("staffMsg",e.message||"직원을 삭제하지 못했습니다.","error")}})}catch(e){target.textContent=e.message||"직원 정보를 불러오지 못했습니다."}}
-async function loadDevices(){const target=$("deviceList");if(!target||state.user?.role!=="admin")return;target.textContent="불러오는 중...";try{const r=await api("/v1/web/admin/devices");const items=r.devices||[];target.innerHTML=items.length?items.map(x=>'<div class="item"><b>'+escapeHtml(x.username||x.staffName||x.staffId||"등록기기")+'</b><br><span class="muted">최근 사용 '+(x.lastSeenAt?new Date(Number(x.lastSeenAt)).toLocaleString():"기록 없음")+'</span><div class="actions"><button type="button" class="secondary device-revoke" data-id="'+escapeHtml(x.id)+'">등록삭제</button></div></div>').join(""):"등록된 기기가 없습니다.";target.querySelectorAll(".device-revoke").forEach(b=>b.onclick=async()=>{try{await api("/v1/web/admin/devices/"+encodeURIComponent(b.dataset.id),{method:"POST"});await loadDevices()}catch(e){alert(e.message||"기기를 해제하지 못했습니다.")}})}catch(e){target.textContent=e.message||"등록기기 정보를 불러오지 못했습니다."}}async function loadInventory(){const root=$("inventoryList");if(!root)return;root.textContent="불러오는 중...";try{const d=await api("/v1/web/settlements?limit=500"),latest=new Map();for(const x of d.settlements||[]){if(x.status!=="manager_approved")continue;const updated=Number(x.updatedAt||0);for(const i of x.payload?.lotteryItems||[]){if(!LOTTERY_PRODUCTS.includes(i.product))continue;const key=rowKey(i),old=latest.get(key);if(!old||updated>old.updated)latest.set(key,{updated,item:i})}}const groups=LOTTERY_PRODUCTS.map(product=>({product,rows:[...latest.values()].filter(v=>v.item.product===product).sort((a,b)=>String(a.item.draw||"").localeCompare(String(b.item.draw||""),"ko"))})).filter(g=>g.rows.length);root.innerHTML=groups.length?groups.map(g=>'<section class="card"><h3>'+escapeHtml(g.product)+'</h3><div class="grid">'+g.rows.map(v=>{const i=v.item,c=calc(i);return '<div class="stock-card"><b>'+escapeHtml(i.draw||"회차 미입력")+'</b><div class="stock-summary">원재고 '+c.original+'장 → 근무 전 반품 '+c.pre+'장 → 반영 재고 <b>'+c.adjusted+'장</b><br>입고 '+c.restock+'장 · 근무 중 반품 '+c.onDuty+'장<br>판매가능 '+c.available+'장 · 마감 '+c.end+'장 · 판매 '+c.sold+'장</div></div>'}).join("")+'</div></section>').join(""):"승인된 재고 기록이 없습니다."}catch(e){root.textContent=e.message||"재고를 불러오지 못했습니다."}}async function loadCarryoverInventory(){try{const d=await api("/v1/web/settlements?limit=500");const latest=new Map();for(const x of d.settlements||[]){if(x.status!=="manager_approved")continue;const updated=Number(x.updatedAt||0);for(const i of (x.payload?.lotteryItems||[])){if(!["스피또500","스피또1000","스피또2000","연금복권"].includes(i.product))continue;const key=(i.product||"복권")+"|"+(i.draw||"");const current=latest.get(key);if(!current||updated>current.updated)latest.set(key,{updated,item:i})}}if(!latest.size){msg("formMsg","인계할 승인 완료 재고가 없습니다.","error");return}loadRowsFromItems([]);[...latest.values()].sort((a,b)=>(String(a.item.product)+String(a.item.draw)).localeCompare(String(b.item.product)+String(b.item.draw),"ko")).forEach(v=>{const x={product:v.item.product,draw:v.item.draw,originalStock:num(v.item.endingStock),preWorkReturn:0,restock:0,onDutyReturn:0,endingStock:0};addRow("stock",x);addRow("preReturn",x);addRow("dutyAdjust",x);addRow("ending",x)});msg("formMsg","가장 최근 승인 완료 정산의 마감 재고를 근무 전 재고로 불러왔습니다.","ok")}catch(e){msg("formMsg",e.message||"승인된 마감 재고를 불러오지 못했습니다.","error")}}function setShiftView(view){const pre=$("preShiftWorkflow"),post=$("postShiftWorkflow");if(!pre||!post)return;const isPre=view!=="post";pre.classList.toggle("hidden",!isPre);post.classList.toggle("hidden",isPre);document.querySelectorAll("[data-shift-view]").forEach(b=>{const active=b.dataset.shiftView===view;b.classList.toggle("secondary",!active)})}function preShiftKey(){return"lotteryPreShift:"+String(state.user?.staffId||"guest")}async function savePreShift(){try{const stock=new Map(readRows("stock").map(x=>[rowKey(x),x])),pre=new Map(readRows("preReturn").map(x=>[rowKey(x),x]));const items=[...stock.entries()].map(([key,x])=>({product:x.product,draw:x.draw,originalStock:num(x.originalStock),preWorkReturn:num(pre.get(key)?.preWorkReturn),restock:0,onDutyReturn:0,endingStock:0}));const saved=(()=>{try{return JSON.parse(localStorage.getItem(preShiftKey())||"{}")}catch{return {}}})();const now=Date.now(),id=saved.id||("web-"+state.user.staffId+"-"+now);const draft={id,businessDate:$("businessDate").value,createdBy:{id:state.user.staffId,name:state.user.staffName||state.user.name||state.user.username,role:state.user.role},status:"draft",updatedAt:now,preSafeAmount:Number($("preSafeAmount").value||0),workflow:{preShift:"saved",postShift:"not_started"},lotteryItems:items};await api("/v1/web/settlements",{method:"POST",body:JSON.stringify({payload:draft})});localStorage.setItem(preShiftKey(),JSON.stringify({id,businessDate:draft.businessDate,preSafeAmount:draft.preSafeAmount,items,savedAt:now}));msg("formMsg","근무 전 정산을 공용 서버에 저장했습니다. 다른 기기에서도 이어서 할 수 있습니다.","ok");setShiftView("post")}catch(e){msg("formMsg",e.message||"근무 전 정산 저장에 실패했습니다.","error")}}async function restorePreShift(){try{const r=await api("/v1/web/settlements?status=draft&limit=100");const rows=(r.settlements||[]).filter(x=>x.status==="draft").sort((a,b)=>Number(b.updatedAt||0)-Number(a.updatedAt||0));const x=rows[0];if(!x)return;const p=x.payload||x;if(p.businessDate)$("businessDate").value=p.businessDate;if($("preSafeAmount"))$("preSafeAmount").value=p.preSafeAmount||0;if(Array.isArray(p.lotteryItems)&&p.lotteryItems.length)loadRowsFromItems(p.lotteryItems);localStorage.setItem(preShiftKey(),JSON.stringify({id:x.id,businessDate:p.businessDate,preSafeAmount:p.preSafeAmount,items:p.lotteryItems||[],savedAt:x.updatedAt||Date.now()}));msg("formMsg","공용 서버에 저장된 근무 전 정산을 불러왔습니다.","muted")}catch{try{const raw=localStorage.getItem(preShiftKey());if(!raw)return;const d=JSON.parse(raw);if(d.businessDate)$("businessDate").value=d.businessDate;if($("preSafeAmount"))$("preSafeAmount").value=d.preSafeAmount||0;if(Array.isArray(d.items)&&d.items.length)loadRowsFromItems(d.items)}catch{}}}function approvalSummary(x){const p=x.payload||x,events=Array.isArray(p.approvalEvents)?p.approvalEvents:[];return '<div class="card"><b>근무 전</b><br>금고 '+Number(p.preSafeAmount||0).toLocaleString()+'원</div><div class="card"><b>근무 후</b><br>현금 '+Number(p.cashAmount||0).toLocaleString()+'원 · 금고 '+Number(p.safeAmount||0).toLocaleString()+'원 · 팁/기타 '+Number(p.tipAmount||0).toLocaleString()+'원</div>'+(events.length?'<div class="card"><b>승인 이력</b><br>'+events.map(e=>escapeHtml(statusLabel(e.status||""))+' · '+escapeHtml(e.actor?.name||"관리자")+' · '+new Date(Number(e.createdAt||0)).toLocaleString()).join('<br>')+'</div>':"")}function showSettlementDetail(x){const p=x.payload||x,items=Array.isArray(p.lotteryItems)?p.lotteryItems:[];const lines=[];const author=x.author?.name||x.employeeName||x.staffName||"";const date=x.businessDate||p.businessDate||"";if(author||date)lines.push('<div class="card"><b>정산 정보</b><br>'+escapeHtml(author)+(author&&date?" · ":"")+escapeHtml(date)+'</div>');lines.push(approvalSummary(x));if(items.length){lines.push('<div class="card"><b>인쇄복권 재고</b><br>'+stockSummary(items)+'</div>');const pre=items.filter(v=>num(v.preWorkReturn)>0),duty=items.filter(v=>num(v.onDutyReturn)>0);if(pre.length)lines.push('<div class="card"><b>근무 전 반품</b><br>'+pre.map(v=>escapeHtml(v.product||"복권")+(v.draw?" / "+escapeHtml(v.draw):"")+' · 반품 '+num(v.preWorkReturn)+'장').join('<br>')+'</div>');if(duty.length)lines.push('<div class="card"><b>근무 중 반품</b><br>'+duty.map(v=>escapeHtml(v.product||"복권")+(v.draw?" / "+escapeHtml(v.draw):"")+' · 반품 '+num(v.onDutyReturn)+'장').join('<br>')+'</div>')}const photos=Array.isArray(p.attachments)?p.attachments:[];if(photos.length)lines.push('<div class="card"><b>증빙 사진</b><div class="photos">'+photos.map(a=>'<img class="evidence-photo" src="'+escapeHtml(a.dataUrl||"")+'" alt="증빙사진">').join("")+'</div></div>');lines.push('<div class="card"><b>상태</b><br>'+escapeHtml(statusLabel(x.status||p.status||""))+'</div>');$("detailContent").innerHTML=lines.join("");$("detailContent").querySelectorAll(".evidence-photo").forEach(img=>img.onclick=()=>openPhotoModal(img.src));setView("detail")}
-async function loadApprovalList(){const target=$("approvalList");if(state.user?.role!=="admin"){target.textContent="관리자 전용 기능입니다.";return}try{const r=await api("/v1/web/settlements?status=submitted");const items=(r.settlements||[]).slice().sort((a,b)=>Number(b.updatedAt||b.createdAt||0)-Number(a.updatedAt||a.createdAt||0));target.innerHTML=items.length?items.map(x=>'<article class="item"><div class="row between"><strong>'+esc(x.author?.name||x.employeeName||x.staffName||x.id)+' · '+esc(x.businessDate||"")+'</strong><span class="badge">'+esc(statusLabel(x.status))+'</span></div><div class="actions"><button class="secondary approval-detail" data-id="'+esc(x.id)+'">상세보기</button><button class="approve" data-id="'+esc(x.id)+'">승인</button><button class="reject" data-id="'+esc(x.id)+'">반려</button></div></article>').join(""):"승인대기 정산이 없습니다.";target.querySelectorAll(".approval-detail").forEach(b=>b.onclick=()=>{const item=items.find(x=>x.id===b.dataset.id);if(item)showSettlementDetail(item)});target.querySelectorAll(".approve").forEach(b=>b.onclick=()=>transition(b.dataset.id,"approve").then(loadApprovalList));target.querySelectorAll(".reject").forEach(b=>b.onclick=()=>transition(b.dataset.id,"reject").then(loadApprovalList));}catch(e){target.textContent=e.message||"승인대기 목록을 불러오지 못했습니다."}}
-async function loadList(){const root=$("list");root.textContent="불러오는 중...";try{const d=await api("/v1/web/settlements?limit=100");if(!d.settlements.length){root.textContent="정산 내역이 없습니다.";return}root.innerHTML=d.settlements.slice().sort((a,b)=>Number(b.updatedAt||b.createdAt||0)-Number(a.updatedAt||a.createdAt||0)).map(x=>{const p=x.payload||{},buttons=state.user.role==="admin"&&x.status==="submitted"?'<button data-approve="'+escapeHtml(x.id)+'">승인</button><button class="danger" data-reject="'+escapeHtml(x.id)+'">반려</button>':"";return '<article class="item"><div class="row between"><strong>'+escapeHtml(x.author.name)+' · '+escapeHtml(x.businessDate)+'</strong><span class="badge">'+escapeHtml(statusLabel(x.status))+'</span></div><div class="actions"><button class="secondary" data-detail="'+escapeHtml(x.id)+'">상세보기</button>'+buttons+"</div></article>"}).join("");root.querySelectorAll("[data-approve]").forEach(b=>b.onclick=()=>transition(b.dataset.approve,"approve"));root.querySelectorAll("[data-reject]").forEach(b=>b.onclick=()=>transition(b.dataset.reject,"reject"));root.querySelectorAll("[data-detail]").forEach(b=>b.onclick=()=>{const item=d.settlements.find(x=>x.id===b.dataset.detail);if(item)showSettlementDetail(item)})}catch(err){root.textContent=err.message}}async function transition(id,action){try{const result=await api("/v1/web/settlements/"+encodeURIComponent(id)+"/"+action,{method:"POST"});if(action==="approve"&&result.status!=="manager_approved"&&result.payload?.status!=="manager_approved")throw new Error("승인 완료 상태를 확인하지 못했습니다. 다시 확인해 주세요.");if(result.payload&&Array.isArray(result.payload.lotteryItems)){const before=(result.payload.preWorkReturns||[]).reduce((n,x)=>n+num(x.quantity),0),during=(result.payload.onDutyReturns||[]).reduce((n,x)=>n+num(x.quantity),0);console.info("승인 처리 후 저장 payload 검증", {id, action, beforeReturn:before, duringReturn:during, lotteryItems:result.payload.lotteryItems.length});}localStorage.setItem("lotteryWebLastSync",String(Date.now()));await Promise.all([loadList(),state.user?.role==="admin"?loadApprovalList():Promise.resolve(),state.user?.role==="admin"?renderHomeDashboard():Promise.resolve()]);if(action==="approve"){await loadInventory();const latest=await api("/v1/web/settlements?limit=500");const approved=(latest.settlements||[]).find(x=>x.id===id);if(!approved||approved.status!=="manager_approved")throw new Error("승인 결과가 서버 목록에 반영되지 않았습니다.");localStorage.setItem("lotteryWebLastApprovedSettlement",id);window.dispatchEvent(new CustomEvent("lotteryApprovalSynced",{detail:{id,status:"manager_approved"}}));}else if(action==="reject"){const latest=await api("/v1/web/settlements?limit=500");const rejected=(latest.settlements||[]).find(x=>x.id===id);if(!rejected||rejected.status!=="rejected")throw new Error("반려 결과가 서버 목록에 반영되지 않았습니다.");}}catch(err){alert(err.message)}}async function compress(file){const bitmap=await createImageBitmap(file),max=1600,scale=Math.min(1,max/Math.max(bitmap.width,bitmap.height)),c=document.createElement("canvas");c.width=Math.max(1,Math.round(bitmap.width*scale));c.height=Math.max(1,Math.round(bitmap.height*scale));c.getContext("2d").drawImage(bitmap,0,0,c.width,c.height);const blob=await new Promise(r=>c.toBlob(r,"image/jpeg",.8));return new Promise((resolve,reject)=>{const fr=new FileReader;fr.onload=()=>resolve({name:file.name,type:"image/jpeg",dataUrl:fr.result,size:blob.size});fr.onerror=reject;fr.readAsDataURL(blob)})}$("photos").addEventListener("change",async e=>{const selected=[...e.target.files];const files=selected.slice(0,8);if(selected.length>8){e.target.value="";state.attachments=[];$("photoPreview").innerHTML="";msg("formMsg","사진은 최대 8장까지입니다. 다시 선택해 주세요.","error");return}try{state.attachments=await Promise.all(files.map(compress));$("photoPreview").innerHTML=state.attachments.map(x=>'<img src="'+x.dataUrl+'" alt="사진">').join("")}catch{msg("formMsg","사진 처리에 실패했습니다.","error")}});$("addStockBtn").onclick=()=>addRow("stock",{});$("addPreReturnBtn").onclick=()=>addRow("preReturn",{});$("addDutyAdjustBtn").onclick=()=>addRow("dutyAdjust",{});$("addEndingStockBtn").onclick=()=>addRow("ending",{});$("settlementForm").addEventListener("submit",async e=>{e.preventDefault();try{const lotteryItems=readStock();const now=Date.now();let prior={};try{prior=JSON.parse(localStorage.getItem(preShiftKey())||"{}")}catch{}const id=prior.id||("web-"+state.user.staffId+"-"+now),payload={id,businessDate:$("businessDate").value,createdBy:{id:state.user.staffId,name:state.user.staffName||state.user.name||state.user.username,role:state.user.role},status:"submitted",updatedAt:now,cashAmount:Number($("cashAmount").value||0),preSafeAmount:Number($("preSafeAmount")?.value||0),safeAmount:Number($("safeAmount").value||0),tipAmount:Number($("tipAmount").value||0),workflow:{preShift:"saved_or_entered",postShift:"submitted"},memo:$("memo").value.trim(),lotteryItems,preWorkReturns:lotteryItems.map(i=>({product:i.product,draw:i.draw,quantity:i.preWorkReturn})),onDutyReturns:lotteryItems.map(i=>({product:i.product,draw:i.draw,quantity:i.onDutyReturn})),attachments:state.attachments};await api("/v1/web/settlements",{method:"POST",body:JSON.stringify({payload})});localStorage.removeItem(preShiftKey());state.attachments=[];$("photos").value="";$("photoPreview").innerHTML="";$("memo").value="";loadRowsFromItems([]);addRow("stock",{});addRow("preReturn",{});addRow("dutyAdjust",{});addRow("ending",{});msg("formMsg","반품 포함 정산이 서버에 저장되고 승인 요청되었습니다.","ok");await loadList()}catch(err){msg("formMsg",err.message,"error")}});$("loadCarryoverBtn").onclick=loadCarryoverInventory;$("savePreShiftBtn").onclick=savePreShift;$("refreshInventoryBtn").onclick=loadInventory;$("webUserForm").addEventListener("submit",createWebUser);$("loginForm").addEventListener("submit",login);$("refreshBtn").onclick=async()=>{try{await loadList()}catch(e){msg("historyMsg",e.message||"새로고침에 실패했습니다.","error")}};$("syncNowBtn").onclick=async()=>{const out=$("syncMsg");out.textContent="동기화 중...";try{await Promise.all([loadList(),loadInventory(),renderHomeDashboard()]);localStorage.setItem("lotteryWebLastSync",String(Date.now()));out.textContent="공용 서버 데이터 기준 동기화가 완료되었습니다."}catch(e){out.textContent=e.message||"동기화에 실패했습니다."}};let photoScale=1;function openPhotoModal(src){const modal=$("photoModal"),img=$("photoModalImg");if(!modal||!img)return;photoScale=1;img.src=src;img.style.transform="scale(1)";modal.classList.remove("hidden")}function bindPhotoModal(){const modal=$("photoModal"),img=$("photoModalImg");if(!modal||!img)return;$("photoZoomIn").onclick=()=>{photoScale=Math.min(4,photoScale+.25);img.style.transform="scale("+photoScale+")"};$("photoZoomOut").onclick=()=>{photoScale=Math.max(.5,photoScale-.25);img.style.transform="scale("+photoScale+")"};$("photoClose").onclick=()=>modal.classList.add("hidden");modal.onclick=e=>{if(e.target===modal)modal.classList.add("hidden")}}bindPhotoModal();$("logoutBtn").onclick=async()=>{try{await api("/v1/web/auth/logout",{method:"POST"})}catch{}localStorage.removeItem("webToken");location.reload()};$("businessDate").value=new Date().toISOString().slice(0,10);addRow("stock",{});addRow("preReturn",{});addRow("dutyAdjust",{});addRow("ending",{});document.querySelectorAll("[data-shift-view]").forEach(b=>b.onclick=()=>setShiftView(b.dataset.shiftView));setShiftView("pre");restore();
+const state = {
+  token: localStorage.getItem("webToken") || "",
+  user: null,
+  settlements: [],
+  editingId: null,
+  attachments: [],
+  photoScale: 1,
+};
+
+const $ = (id) => document.getElementById(id);
+const LOTTERY_PRODUCTS = ["스피또500", "스피또1000", "스피또2000", "연금복권"];
+const pageTitles = { home: "홈", history: "내역", inventory: "재고", manage: "관리" };
+
+const api = async (path, options = {}) => {
+  const headers = { ...(options.headers || {}) };
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, { ...options, headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem("webToken");
+      state.token = "";
+      state.user = null;
+      showLogin();
+    }
+    throw new Error(data.message || "요청을 처리하지 못했습니다.");
+  }
+  return data;
+};
+
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+const num = (value) => Math.max(0, Number(value || 0));
+const money = (value) => `${Number(value || 0).toLocaleString("ko-KR")}원`;
+const dateTime = (value) => value ? new Date(Number(value)).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" }) : "-";
+const today = () => new Date().toISOString().slice(0, 10);
+const setMessage = (id, text, type = "muted") => { const element = $(id); if (element) { element.textContent = text; element.className = type; } };
+const rowKey = (item) => `${String(item.product || "").trim()}|${String(item.draw || "").trim()}`;
+
+function showLogin() {
+  $("loginView")?.classList.remove("hidden");
+  $("appView")?.classList.add("hidden");
+}
+
+function showApp() {
+  $("loginView")?.classList.add("hidden");
+  $("appView")?.classList.remove("hidden");
+  const roleLabel = state.user?.role === "admin" ? "관리자" : "직원";
+  const name = state.user?.staffName || state.user?.username || "사용자";
+  $("userInfo").textContent = `${name} · ${roleLabel}`;
+  $("avatar").textContent = name.slice(0, 1);
+  $("employeeHome")?.classList.toggle("hidden", state.user?.role === "admin");
+  $("adminHome")?.classList.toggle("hidden", state.user?.role !== "admin");
+  $("adminManage")?.classList.toggle("hidden", state.user?.role !== "admin");
+  $("employeeOnlyManage")?.classList.toggle("hidden", state.user?.role === "admin");
+  loadHome();
+}
+
+function setPage(view) {
+  const normalized = pageTitles[view] ? view : "home";
+  document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === `${normalized}Page`));
+  document.querySelectorAll("[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === normalized));
+  $("pageTitle").textContent = pageTitles[normalized];
+  if (normalized === "history") loadHistory();
+  if (normalized === "inventory") loadInventory();
+  if (normalized === "manage" && state.user?.role === "admin") { loadApproval(); loadStaff(); loadDevices(); }
+}
+
+function setShift(shift) {
+  document.querySelectorAll("[data-shift]").forEach((button) => button.classList.toggle("active", button.dataset.shift === shift));
+  $("prePane")?.classList.toggle("active", shift === "pre");
+  $("postPane")?.classList.toggle("active", shift === "post");
+  $("postDetails")?.classList.toggle("hidden", shift !== "post");
+}
+
+function openWorkspace(settlement = null) {
+  $("settlementWorkspace")?.classList.remove("hidden");
+  state.editingId = settlement?.id || null;
+  state.attachments = Array.isArray(settlement?.payload?.attachments) ? settlement.payload.attachments : [];
+  $("businessDate").value = settlement?.businessDate || settlement?.payload?.businessDate || today();
+  $("preSafeAmount").value = num(settlement?.payload?.preSafeAmount);
+  $("cashAmount").value = num(settlement?.payload?.cashAmount);
+  $("safeAmount").value = num(settlement?.payload?.safeAmount);
+  $("bankTransferAmount").value = num(settlement?.payload?.bankTransferAmount);
+  $("prizePayoutAmount").value = num(settlement?.payload?.prizePayoutAmount);
+  $("handover").value = settlement?.payload?.handover || "";
+  $("memo").value = settlement?.payload?.memo || "";
+  renderRows(settlement?.payload?.lotteryItems || []);
+  renderAttachments();
+  setShift(settlement?.payload?.workflow?.preShift === "saved_or_entered" && settlement?.status === "draft" ? "post" : "pre");
+  $("settlementWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function closeWorkspace() {
+  $("settlementWorkspace")?.classList.add("hidden");
+  state.editingId = null;
+  state.attachments = [];
+}
+
+function productOptions(selected = "스피또1000") {
+  const product = LOTTERY_PRODUCTS.includes(String(selected)) ? String(selected) : LOTTERY_PRODUCTS[1];
+  return LOTTERY_PRODUCTS.map((item) => `<option value="${esc(item)}" ${item === product ? "selected" : ""}>${esc(item)}</option>`).join("");
+}
+
+function inventoryRow(item = {}) {
+  const id = `row-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const original = num(item.originalStock);
+  const pre = num(item.preWorkReturn);
+  const restock = num(item.restock);
+  const onDuty = num(item.onDutyReturn);
+  const ending = num(item.endingStock);
+  const adjusted = Math.max(0, original - pre);
+  const available = Math.max(0, adjusted + restock - onDuty);
+  const sold = Math.max(0, available - ending);
+  return `<div class="inventory-row" data-row-id="${id}">
+    <label><span class="sub-label">품목</span><select data-field="product">${productOptions(item.product)}</select></label>
+    <label><span class="sub-label">회차</span><input data-field="draw" value="${esc(item.draw || "")}" placeholder="예: 109회"></label>
+    <label><span class="sub-label">원재고</span><input data-field="originalStock" type="number" min="0" step="1" value="${original}"></label>
+    <label><span class="sub-label">전 반품</span><input data-field="preWorkReturn" type="number" min="0" step="1" value="${pre}"></label>
+    <label><span class="sub-label">입고</span><input data-field="restock" type="number" min="0" step="1" value="${restock}"></label>
+    <label><span class="sub-label">중 반품</span><input data-field="onDutyReturn" type="number" min="0" step="1" value="${onDuty}"></label>
+    <label><span class="sub-label">마감</span><input data-field="endingStock" type="number" min="0" step="1" value="${ending}"></label>
+    <div class="computed" data-computed><span class="sub-label">판매 수량</span>${sold}장</div>
+    <button class="button danger small row-wide" data-remove-row type="button">삭제</button>
+  </div>`;
+}
+
+function renderRows(items = []) {
+  const rows = $("stockRows");
+  if (!rows) return;
+  rows.innerHTML = (items.length ? items : [{}]).map(inventoryRow).join("");
+  bindRows();
+  updateComputed();
+}
+
+function bindRows() {
+  document.querySelectorAll("[data-remove-row]").forEach((button) => button.addEventListener("click", () => {
+    const rows = document.querySelectorAll("[data-row-id]");
+    if (rows.length <= 1) { setMessage("formMsg", "최소 한 개의 복권 행은 남겨 주세요.", "error"); return; }
+    button.closest("[data-row-id]")?.remove();
+  }));
+  document.querySelectorAll("[data-row-id] input, [data-row-id] select").forEach((input) => input.addEventListener("input", updateComputed));
+}
+
+function readRows({ requireEnding = false } = {}) {
+  const rows = [];
+  const keys = new Set();
+  document.querySelectorAll("[data-row-id]").forEach((card) => {
+    const item = {};
+    card.querySelectorAll("[data-field]").forEach((field) => { item[field.dataset.field] = field.value; });
+    item.product = String(item.product || "").trim();
+    item.draw = String(item.draw || "").trim();
+    const quantities = ["originalStock", "preWorkReturn", "restock", "onDutyReturn", "endingStock"].map((field) => num(item[field]));
+    const hasInput = item.draw || quantities.some((value) => value > 0);
+    if (!hasInput) return;
+    if (!LOTTERY_PRODUCTS.includes(item.product)) throw new Error("인쇄복권 품목을 선택해 주세요.");
+    if (!item.draw) throw new Error("품목의 회차를 입력해 주세요.");
+    const key = rowKey(item);
+    if (keys.has(key)) throw new Error("같은 품목과 회차를 중복 등록할 수 없습니다.");
+    keys.add(key);
+    const original = num(item.originalStock), pre = num(item.preWorkReturn), restock = num(item.restock), onDuty = num(item.onDutyReturn), ending = num(item.endingStock);
+    const adjusted = original - pre;
+    const available = adjusted + restock - onDuty;
+    if (pre > original) throw new Error(`${item.product} / ${item.draw}: 근무 전 반품은 원재고보다 많을 수 없습니다.`);
+    if (onDuty > adjusted + restock) throw new Error(`${item.product} / ${item.draw}: 근무 중 반품은 판매가능 재고를 초과할 수 없습니다.`);
+    if (requireEnding && ending > available) throw new Error(`${item.product} / ${item.draw}: 마감 재고는 판매가능 재고보다 많을 수 없습니다.`);
+    rows.push({ product: item.product, draw: item.draw, originalStock: original, preWorkReturn: pre, adjustedStock: Math.max(0, adjusted), restock, onDutyReturn: onDuty, availableStock: Math.max(0, available), endingStock: ending, soldQuantity: Math.max(0, available - ending) });
+  });
+  if (requireEnding && !rows.length) throw new Error("인쇄복권 품목을 한 개 이상 입력해 주세요.");
+  return rows;
+}
+
+function updateComputed() {
+  document.querySelectorAll("[data-row-id]").forEach((card) => {
+    const get = (field) => num(card.querySelector(`[data-field="${field}"]`)?.value);
+    const original = get("originalStock"), pre = get("preWorkReturn"), restock = get("restock"), onDuty = get("onDutyReturn"), ending = get("endingStock");
+    const available = Math.max(0, original - pre + restock - onDuty);
+    const sold = Math.max(0, available - ending);
+    const computed = card.querySelector("[data-computed]");
+    if (computed) computed.innerHTML = `<span class="sub-label">판매 수량</span>${sold.toLocaleString("ko-KR")}장`;
+  });
+}
+
+function renderAttachments() {
+  const root = $("photoPreview");
+  if (!root) return;
+  root.innerHTML = state.attachments.map((item, index) => `<img src="${esc(item.dataUrl)}" alt="증빙 사진 ${index + 1}" data-photo-src="${esc(item.dataUrl)}">`).join("");
+  root.querySelectorAll("[data-photo-src]").forEach((image) => image.addEventListener("click", () => openPhoto(image.dataset.photoSrc)));
+}
+
+async function compressPhoto(file) {
+  const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
+  const image = new Image();
+  image.src = dataUrl;
+  await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; });
+  const scale = Math.min(1, 1500 / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  return { name: file.name.slice(0, 255), dataUrl: canvas.toDataURL("image/jpeg", .78) };
+}
+
+async function savePreShift() {
+  try {
+    const lotteryItems = readRows();
+    const payload = buildPayload({ status: "draft", lotteryItems, workflow: { preShift: "saved_or_entered", postShift: "not_started" } });
+    await api("/v1/web/settlements", { method: "POST", body: JSON.stringify({ payload }) });
+    state.editingId = payload.id;
+    setMessage("formMsg", "근무 전 정산이 저장되었습니다. 근무 후 입력을 이어서 진행할 수 있습니다.", "success");
+    await loadHome();
+  } catch (error) { setMessage("formMsg", error.message, "error"); }
+}
+
+function buildPayload({ status, lotteryItems, workflow }) {
+  const id = state.editingId || `web-${state.user.staffId}-${Date.now()}`;
+  return { id, businessDate: $("businessDate").value || today(), createdBy: { id: state.user.staffId, name: state.user.staffName || state.user.username, role: state.user.role }, status, updatedAt: Date.now(), preSafeAmount: num($("preSafeAmount").value), cashAmount: num($("cashAmount").value), safeAmount: num($("safeAmount").value), bankTransferAmount: num($("bankTransferAmount").value), prizePayoutAmount: num($("prizePayoutAmount").value), handover: $("handover").value.trim(), memo: $("memo").value.trim(), workflow, lotteryItems, attachments: state.attachments };
+}
+
+async function submitSettlement() {
+  try {
+    const lotteryItems = readRows({ requireEnding: true });
+    const payload = buildPayload({ status: "submitted", lotteryItems, workflow: { preShift: "saved_or_entered", postShift: "submitted" } });
+    await api("/v1/web/settlements", { method: "POST", body: JSON.stringify({ payload }) });
+    setMessage("formMsg", "근무 후 정산이 저장되고 관리자 승인 요청으로 전환되었습니다.", "success");
+    closeWorkspace();
+    await loadHome();
+    setPage("history");
+  } catch (error) { setMessage("formMsg", error.message, "error"); }
+}
+
+async function loadCarryover() {
+  try {
+    const data = await api("/v1/web/settlements?limit=500");
+    const latest = new Map();
+    (data.settlements || []).filter((item) => item.status === "manager_approved").forEach((settlement) => {
+      (settlement.payload?.lotteryItems || []).forEach((item) => {
+        const key = rowKey(item), previous = latest.get(key);
+        if (!previous || Number(settlement.updatedAt) > Number(previous.updatedAt)) latest.set(key, { updatedAt: settlement.updatedAt, item });
+      });
+    });
+    const carry = [...latest.values()].map(({ item }) => ({ product: item.product, draw: item.draw, originalStock: num(item.endingStock), preWorkReturn: 0, restock: 0, onDutyReturn: 0, endingStock: 0 }));
+    renderRows(carry);
+    setMessage("formMsg", carry.length ? "승인된 마감 재고를 근무 전 원재고로 불러왔습니다." : "불러올 승인 완료 재고가 없습니다.", carry.length ? "success" : "muted");
+  } catch (error) { setMessage("formMsg", error.message, "error"); }
+}
+
+async function loadHome() {
+  if (!state.user) return;
+  try {
+    const data = await api("/v1/web/settlements?limit=100");
+    state.settlements = data.settlements || [];
+    const mine = state.user.role === "admin" ? state.settlements : state.settlements.filter((item) => item.author?.id === state.user.staffId);
+    const latest = mine[0];
+    if (state.user.role === "admin") {
+      $("homeGreeting").textContent = "관리자 업무를 확인하세요.";
+      $("homeDashboardMsg").textContent = "승인 대기 정산과 직원 상태를 관리합니다.";
+      $("homeHeroActions").innerHTML = `<button class="button" data-home-page="manage">정산 승인 보기</button><button class="button secondary" data-home-page="history">전체 내역 보기</button>`;
+      const submitted = state.settlements.filter((item) => item.status === "submitted").length;
+      const approved = state.settlements.filter((item) => item.status === "manager_approved").length;
+      const drafts = state.settlements.filter((item) => item.status === "draft").length;
+      $("adminMetrics").innerHTML = `<div class="metric"><span>승인 대기</span><strong>${submitted}</strong></div><div class="metric"><span>승인 완료</span><strong>${approved}</strong></div><div class="metric"><span>작성 중</span><strong>${drafts}</strong></div>`;
+    } else {
+      const draft = mine.find((item) => item.status === "draft");
+      const candidate = draft || latest;
+      const status = candidate?.status || "draft";
+      $("homeGreeting").textContent = draft ? "작성 중인 정산을 이어가세요." : latest ? "오늘의 정산 상태를 확인하세요." : "오늘의 정산 업무를 시작하세요.";
+      $("homeDashboardMsg").textContent = draft ? "근무 전 정산이 저장되어 있습니다. 근무 후 입력을 이어갈 수 있습니다." : latest ? `최근 정산은 ${statusLabel(status)} 상태입니다.` : "근무 전 금고와 복권 재고부터 입력합니다.";
+      $("homeHeroActions").innerHTML = draft ? `<button class="button" data-resume-id="${esc(draft.id)}">정산 이어서 입력</button>` : `<button class="button" data-start-settlement>근무 전 정산 시작</button>`;
+      $("todayStatus").className = `status ${statusClass(status)}`;
+      $("todayStatus").textContent = statusLabel(status);
+      $("employeeTaskContent").innerHTML = candidate ? `<p style="margin:0;line-height:1.7">${esc(candidate.businessDate)} 정산 · ${money(candidate.payload?.cashAmount)}<br>마지막 저장 ${dateTime(candidate.updatedAt)}</p>` : `<p style="margin:0;line-height:1.7">아직 저장된 정산이 없습니다.<br>근무 전 정산을 시작해 주세요.</p>`;
+      $("employeeQuickActions").innerHTML = `<button class="quick" data-home-page="history"><span class="quick-icon">▤</span><span><strong>정산 내역</strong><small>내가 저장한 정산과 승인 상태</small></span></button><button class="quick" data-home-page="inventory"><span class="quick-icon">▥</span><span><strong>복권 재고</strong><small>승인된 최신 재고</small></span></button>`;
+    }
+    bindHomeActions();
+  } catch (error) { $("homeDashboardMsg").textContent = error.message; }
+}
+
+function bindHomeActions() {
+  document.querySelectorAll("[data-home-page]").forEach((button) => button.onclick = () => setPage(button.dataset.homePage));
+  document.querySelectorAll("[data-start-settlement]").forEach((button) => button.onclick = () => openWorkspace());
+  document.querySelectorAll("[data-resume-id]").forEach((button) => button.onclick = () => { const settlement = state.settlements.find((item) => item.id === button.dataset.resumeId); if (settlement) openWorkspace(settlement); });
+}
+
+function statusClass(status) { return status === "manager_approved" ? "approved" : status === "submitted" ? "submitted" : status === "rejected" ? "rejected" : "draft"; }
+function statusLabel(status) { return ({ draft: "작성 중", submitted: "승인 대기", manager_approved: "승인 완료", rejected: "반려" })[status] || status; }
+
+function inventorySummary(items = []) { return items.map((item) => `${esc(item.product)} / ${esc(item.draw)} · 판매 ${num(item.soldQuantity).toLocaleString("ko-KR")}장 · 마감 ${num(item.endingStock).toLocaleString("ko-KR")}장`).join("<br>"); }
+
+async function loadHistory() {
+  const root = $("historyList"); if (!root) return;
+  root.innerHTML = `<div class="empty">불러오는 중입니다.</div>`;
+  try {
+    const data = await api("/v1/web/settlements?limit=100"); state.settlements = data.settlements || [];
+    root.innerHTML = state.settlements.length ? state.settlements.map((item) => `<article class="list-card"><div class="row"><div><h4>${esc(item.businessDate)} · ${esc(item.author?.name || "직원")} </h4><p>${dateTime(item.updatedAt)} · 현금 ${money(item.payload?.cashAmount)}</p></div><span class="status ${statusClass(item.status)}">${statusLabel(item.status)}</span></div><div class="summary">${inventorySummary(item.payload?.lotteryItems || []) || "인쇄복권 재고 입력 없음"}</div><div class="form-actions"><button class="button ghost small" data-detail-id="${esc(item.id)}" type="button">정산 상세</button>${state.user?.role === "admin" && item.status === "submitted" ? `<button class="button small" data-approve-id="${esc(item.id)}" type="button">승인</button><button class="button danger small" data-reject-id="${esc(item.id)}" type="button">반려</button>` : ""}</div></article>`).join("") : `<div class="empty">저장된 정산이 없습니다.</div>`;
+    bindSettlementActions(root);
+  } catch (error) { root.innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
+}
+
+function bindSettlementActions(root) {
+  root.querySelectorAll("[data-detail-id]").forEach((button) => button.onclick = () => showDetail(state.settlements.find((item) => item.id === button.dataset.detailId)));
+  root.querySelectorAll("[data-approve-id]").forEach((button) => button.onclick = () => transition(button.dataset.approveId, "approve"));
+  root.querySelectorAll("[data-reject-id]").forEach((button) => button.onclick = () => transition(button.dataset.rejectId, "reject"));
+}
+
+async function loadInventory() {
+  const root = $("inventoryList"); if (!root) return;
+  root.innerHTML = `<div class="empty">승인된 최신 재고를 계산 중입니다.</div>`;
+  try {
+    const data = await api("/v1/web/settlements?limit=500"), latest = new Map();
+    (data.settlements || []).filter((item) => item.status === "manager_approved").forEach((settlement) => (settlement.payload?.lotteryItems || []).forEach((item) => { const key = rowKey(item), old = latest.get(key); if (!old || Number(settlement.updatedAt) > Number(old.updatedAt)) latest.set(key, { updatedAt: settlement.updatedAt, item }); }));
+    const items = [...latest.values()].sort((a, b) => `${a.item.product}${a.item.draw}`.localeCompare(`${b.item.product}${b.item.draw}`, "ko"));
+    root.innerHTML = items.length ? items.map(({ item, updatedAt }) => `<article class="list-card"><div class="row"><h4>${esc(item.product)} · ${esc(item.draw)}</h4><span class="status approved">승인 반영</span></div><div class="summary">반품 반영 재고 <strong>${num(item.adjustedStock)}장</strong> · 입고 ${num(item.restock)}장 · 근무 중 반품 ${num(item.onDutyReturn)}장<br>판매가능 <strong>${num(item.availableStock)}장</strong> · 마감 ${num(item.endingStock)}장 · 판매 ${num(item.soldQuantity)}장<br><span class="muted">최종 승인 반영 ${dateTime(updatedAt)}</span></div></article>`).join("") : `<div class="empty">승인 완료된 복권 재고가 없습니다.</div>`;
+  } catch (error) { root.innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
+}
+
+async function loadApproval() {
+  if (state.user?.role !== "admin") return;
+  const root = $("approvalList"); if (!root) return;
+  root.innerHTML = `<div class="empty">승인 대기 정산을 불러오는 중입니다.</div>`;
+  try {
+    const data = await api("/v1/web/settlements?status=submitted&limit=100"), items = data.settlements || [];
+    root.innerHTML = items.length ? items.map((item) => `<article class="list-card"><div class="row"><div><h4>${esc(item.author?.name || "직원")} · ${esc(item.businessDate)}</h4><p>${dateTime(item.updatedAt)} · 현금 ${money(item.payload?.cashAmount)}</p></div><span class="status submitted">승인 대기</span></div><div class="summary">${inventorySummary(item.payload?.lotteryItems || []) || "복권 입력 없음"}</div><div class="form-actions"><button class="button ghost small" data-detail-id="${esc(item.id)}" type="button">상세·증빙 검토</button><button class="button small" data-approve-id="${esc(item.id)}" type="button">승인 반영</button><button class="button danger small" data-reject-id="${esc(item.id)}" type="button">반려</button></div></article>`).join("") : `<div class="empty">현재 승인 대기 정산이 없습니다.</div>`;
+    bindSettlementActions(root);
+  } catch (error) { root.innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
+}
+
+async function transition(id, action) {
+  if (action === "reject" && !window.confirm("이 정산을 반려하시겠습니까?")) return;
+  try { await api(`/v1/web/settlements/${encodeURIComponent(id)}/${action}`, { method: "POST" }); await loadHome(); await loadHistory(); await loadApproval(); await loadInventory(); } catch (error) { window.alert(error.message); }
+}
+
+function showDetail(settlement) {
+  if (!settlement) return;
+  const payload = settlement.payload || {};
+  const items = payload.lotteryItems || [];
+  $("detailContent").innerHTML = `<div class="detail-grid"><div class="detail-box"><h4>기본 정보</h4><p>영업일: ${esc(settlement.businessDate)}<br>작성자: ${esc(settlement.author?.name || "-")}<br>상태: <b>${statusLabel(settlement.status)}</b><br>수정: ${dateTime(settlement.updatedAt)}</p></div><div class="detail-box"><h4>금액</h4><p>근무 전 금고: ${money(payload.preSafeAmount)}<br>현금 등록액: ${money(payload.cashAmount)}<br>근무 후 금고: ${money(payload.safeAmount)}<br>은행 이체: ${money(payload.bankTransferAmount)}<br>당첨금 지급: ${money(payload.prizePayoutAmount)}</p></div></div><div class="detail-box" style="margin-top:12px"><h4>인쇄복권 반품·재고·판매</h4><div class="table-like"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#647589"><th style="padding:7px 4px">품목/회차</th><th>전 반품</th><th>입고</th><th>중 반품</th><th>마감</th><th>판매</th></tr></thead><tbody>${items.map((item) => `<tr style="border-top:1px solid #edf1f3"><td style="padding:8px 4px">${esc(item.product)} / ${esc(item.draw)}</td><td>${num(item.preWorkReturn)}장</td><td>${num(item.restock)}장</td><td>${num(item.onDutyReturn)}장</td><td>${num(item.endingStock)}장</td><td><b>${num(item.soldQuantity)}장</b></td></tr>`).join("") || `<tr><td colspan="6" style="padding:10px 4px;color:#647589">입력된 품목이 없습니다.</td></tr>`}</tbody></table></div></div>${payload.handover || payload.memo ? `<div class="detail-box" style="margin-top:12px"><h4>인수인계·메모</h4><p>${esc(payload.handover || "")}<br>${esc(payload.memo || "")}</p></div>` : ""}${Array.isArray(payload.attachments) && payload.attachments.length ? `<div class="detail-box" style="margin-top:12px"><h4>사진 증빙 ${payload.attachments.length}장</h4><div class="photos">${payload.attachments.map((photo) => `<img src="${esc(photo.dataUrl)}" alt="증빙 사진" data-photo-src="${esc(photo.dataUrl)}">`).join("")}</div></div>` : ""}${Array.isArray(payload.approvalEvents) && payload.approvalEvents.length ? `<div class="detail-box" style="margin-top:12px"><h4>승인 이력</h4><p>${payload.approvalEvents.map((event) => `${esc(statusLabel(event.status))} · ${esc(event.actor?.name || "관리자")} · ${dateTime(event.createdAt)}`).join("<br>")}</p></div>` : ""}`;
+  $("detailModal").classList.remove("hidden");
+  $("detailContent").querySelectorAll("[data-photo-src]").forEach((image) => image.addEventListener("click", () => openPhoto(image.dataset.photoSrc)));
+}
+
+async function loadStaff() {
+  if (state.user?.role !== "admin") return;
+  const root = $("employeeList"); if (!root) return;
+  try {
+    const data = await api("/v1/web/admin/staff"), staff = data.staff || [];
+    root.innerHTML = staff.length ? staff.map((item) => `<div class="staff-card"><div class="staff-meta"><strong>${esc(item.name)} ${item.role === "admin" ? "· 관리자" : "· 직원"}</strong><span>ID: ${esc(item.id)} · 웹 계정: ${esc(item.webUsername || "미연결")} · ${item.webActive ? "사용 중" : "사용 중지"}</span></div><div class="form-actions" style="margin:0">${item.webUsername ? `<button class="button secondary small" data-toggle-staff="${esc(item.id)}" data-next-active="${!item.webActive}" type="button">${item.webActive ? "웹 중지" : "웹 허용"}</button>` : ""}${item.role !== "admin" ? `<button class="button danger small" data-delete-staff="${esc(item.id)}" type="button">삭제</button>` : ""}</div></div>`).join("") : `<div class="empty">등록된 직원이 없습니다.</div>`;
+    root.querySelectorAll("[data-toggle-staff]").forEach((button) => button.onclick = async () => { try { await api(`/v1/web/admin/staff/${encodeURIComponent(button.dataset.toggleStaff)}/web-account`, { method: "PATCH", body: JSON.stringify({ active: button.dataset.nextActive === "true" }) }); await loadStaff(); } catch (error) { window.alert(error.message); } });
+    root.querySelectorAll("[data-delete-staff]").forEach((button) => button.onclick = async () => { if (!window.confirm("직원과 연결된 웹 세션을 삭제하시겠습니까?")) return; try { await api(`/v1/web/admin/staff/${encodeURIComponent(button.dataset.deleteStaff)}`, { method: "DELETE" }); setMessage("staffMsg", "직원이 삭제되고 연결된 웹 세션이 비활성화되었습니다.", "success"); await loadStaff(); } catch (error) { setMessage("staffMsg", error.message, "error"); } });
+  } catch (error) { root.innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
+}
+
+async function loadDevices() {
+  if (state.user?.role !== "admin") return;
+  const root = $("deviceList"); if (!root) return;
+  try { const data = await api("/v1/web/admin/devices"), devices = data.devices || []; root.innerHTML = devices.length ? devices.map((item) => `<div class="device-card"><div class="device-meta"><strong>${esc(item.staffName || item.username || item.staffId)}</strong><span>${esc(item.username)} · 최근 사용 ${dateTime(item.lastSeenAt)}</span></div><button class="button danger small" data-revoke-device="${esc(item.id)}" type="button">등록 해제</button></div>`).join("") : `<div class="empty">현재 등록된 웹 기기가 없습니다.</div>`; root.querySelectorAll("[data-revoke-device]").forEach((button) => button.onclick = async () => { try { await api(`/v1/web/admin/devices/${encodeURIComponent(button.dataset.revokeDevice)}`, { method: "POST" }); await loadDevices(); } catch (error) { window.alert(error.message); } }); } catch (error) { root.innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
+}
+
+function openPhoto(src) { $("photoModalImg").src = src; state.photoScale = 1; $("photoModalImg").style.transform = "scale(1)"; $("photoModal").classList.remove("hidden"); }
+function closePhoto() { $("photoModal").classList.add("hidden"); }
+
+async function login(event) {
+  event.preventDefault();
+  try { const data = await api("/v1/web/auth/login", { method: "POST", body: JSON.stringify({ username: $("username").value.trim(), password: $("password").value }) }); state.token = data.token; state.user = data.user; localStorage.setItem("webToken", state.token); showApp(); } catch (error) { setMessage("loginMsg", error.message, "error"); }
+}
+
+async function restore() {
+  if (!state.token) return showLogin();
+  try { const data = await api("/v1/web/auth/me"); state.user = data.user; showApp(); } catch { localStorage.removeItem("webToken"); state.token = ""; showLogin(); }
+}
+
+async function logout() { try { await api("/v1/web/auth/logout", { method: "POST" }); } catch {} localStorage.removeItem("webToken"); state.token = ""; state.user = null; showLogin(); }
+
+$("loginForm")?.addEventListener("submit", login);
+$("logoutBtn")?.addEventListener("click", logout);
+document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.view)));
+document.querySelectorAll("[data-shift]").forEach((button) => button.addEventListener("click", () => setShift(button.dataset.shift)));
+document.querySelectorAll("[data-admin-panel]").forEach((button) => button.addEventListener("click", () => { document.querySelectorAll("[data-admin-panel]").forEach((item) => item.classList.toggle("active", item === button)); document.querySelectorAll(".admin-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `${button.dataset.adminPanel}Panel`)); if (button.dataset.adminPanel === "approval") loadApproval(); if (button.dataset.adminPanel === "staff") loadStaff(); if (button.dataset.adminPanel === "devices") loadDevices(); }));
+$("addStockBtn")?.addEventListener("click", () => { $("stockRows").insertAdjacentHTML("beforeend", inventoryRow()); bindRows(); });
+$("savePreShiftBtn")?.addEventListener("click", savePreShift);
+$("submitSettlementBtn")?.addEventListener("click", submitSettlement);
+$("loadCarryoverBtn")?.addEventListener("click", loadCarryover);
+$("closeWorkspaceBtn")?.addEventListener("click", closeWorkspace);
+$("refreshBtn")?.addEventListener("click", loadHistory);
+$("refreshInventoryBtn")?.addEventListener("click", loadInventory);
+$("refreshApprovalBtn")?.addEventListener("click", loadApproval);
+$("refreshDevicesBtn")?.addEventListener("click", loadDevices);
+$("closeDetailBtn")?.addEventListener("click", () => $("detailModal").classList.add("hidden"));
+$("detailModal")?.addEventListener("click", (event) => { if (event.target === $("detailModal")) $("detailModal").classList.add("hidden"); });
+$("photoClose")?.addEventListener("click", closePhoto);
+$("photoModal")?.addEventListener("click", (event) => { if (event.target === $("photoModal")) closePhoto(); });
+$("photoZoomIn")?.addEventListener("click", () => { state.photoScale = Math.min(4, state.photoScale + .25); $("photoModalImg").style.transform = `scale(${state.photoScale})`; });
+$("photoZoomOut")?.addEventListener("click", () => { state.photoScale = Math.max(.5, state.photoScale - .25); $("photoModalImg").style.transform = `scale(${state.photoScale})`; });
+$("photos")?.addEventListener("change", async (event) => { try { const files = [...event.target.files]; if (state.attachments.length + files.length > 8) throw new Error("사진 증빙은 최대 8장까지 첨부할 수 있습니다."); state.attachments = state.attachments.concat(await Promise.all(files.map(compressPhoto))); renderAttachments(); event.target.value = ""; } catch (error) { setMessage("formMsg", error.message, "error"); } });
+$("staffForm")?.addEventListener("submit", async (event) => { event.preventDefault(); try { const name = $("staffName").value.trim(); const data = await api("/v1/web/admin/staff", { method: "POST", body: JSON.stringify({ name }) }); $("staffName").value = ""; setMessage("staffMsg", `${data.name || name} 직원을 추가했습니다.`, "success"); await loadStaff(); } catch (error) { setMessage("staffMsg", error.message, "error"); } });
+$("webUserForm")?.addEventListener("submit", async (event) => { event.preventDefault(); try { const data = await api("/v1/web/admin/users", { method: "POST", body: JSON.stringify({ staffId: $("webStaffId").value.trim(), username: $("webNewUsername").value.trim(), password: $("webNewPassword").value, role: "employee" }) }); $("webNewPassword").value = ""; setMessage("webUserMsg", `${data.username} 웹 계정을 연결했습니다.`, "success"); await loadStaff(); } catch (error) { setMessage("webUserMsg", error.message, "error"); } });
+
+renderRows([]);
+restore();

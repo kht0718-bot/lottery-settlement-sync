@@ -227,7 +227,16 @@ export function registerWebRoutes(
       const role = request.body?.role === "admin" ? "admin" : request.body?.role === "employee" ? "employee" : "";
       if (!staffId || !username || password.length < 8 || !role) return response.status(400).json({ code: "INVALID_WEB_USER", message: "staffId, username, role, 8자 이상 password가 필요합니다." });
       const [countRows] = await pool.query<Array<{ count: number }>>("SELECT COUNT(*) AS count FROM web_users WHERE active=TRUE");
-      if (Number(countRows[0]?.count ?? 0) >= 5) return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 최대 5개입니다." });
+      const [roleCountRows] = await pool.query<Array<{ role: WebRole; count: number }>>("SELECT role, COUNT(*) AS count FROM web_users WHERE active=TRUE GROUP BY role");
+      const activeTotal = Number(countRows[0]?.count ?? 0);
+      const activeAdmins = Number(roleCountRows.find((row) => row.role === "admin")?.count ?? 0);
+      const activeEmployees = Number(roleCountRows.find((row) => row.role === "employee")?.count ?? 0);
+      // Browser logins represent the same roster as the APK: exactly one
+      // administrator and up to four employees. They must not create a sixth
+      // active account or a second administrator.
+      if (activeTotal >= 5 || (role === "admin" && activeAdmins >= 1) || (role === "employee" && activeEmployees >= 4)) {
+        return response.status(409).json({ code: "WEB_USER_LIMIT", message: "웹 연결 계정은 관리자 1명과 직원 4명, 총 5명까지이며 관리자는 1명만 둘 수 있습니다." });
+      }
       const [staffRows] = await pool.query<Array<{ id: string; role: WebRole; status: string }>>("SELECT id, role, status FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
       const staff = staffRows[0];
       if (!staff || staff.status !== "active" || staff.role !== role) return response.status(400).json({ code: "INVALID_STAFF", message: "활성 직원 정보와 역할이 일치해야 합니다." });
