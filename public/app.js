@@ -255,7 +255,7 @@ async function loadHome() {
     if (state.user.role === "admin") {
       $("homeGreeting").textContent = "관리자 업무를 확인하세요.";
       $("homeDashboardMsg").textContent = "승인 대기 정산과 직원 상태를 관리합니다.";
-      $("homeHeroActions").innerHTML = `<button class="button" data-home-page="manage">정산 승인 보기</button><button class="button secondary" data-home-page="history">전체 내역 보기</button>`;
+      $("homeHeroActions").innerHTML = `<button class="button" data-admin-start-settlement>근무 전 정산 시작</button><button class="button secondary" data-admin-post-settlement>근무 후 정산 입력</button><button class="button" data-home-page="manage">정산 승인 보기</button><button class="button secondary" data-home-page="history">전체 내역 보기</button>`;
       const submitted = state.settlements.filter((item) => item.status === "submitted").length;
       const approved = state.settlements.filter((item) => item.status === "manager_approved").length;
       const drafts = state.settlements.filter((item) => item.status === "draft").length;
@@ -280,6 +280,8 @@ function bindHomeActions() {
   document.querySelectorAll("[data-home-page]").forEach((button) => button.onclick = () => setPage(button.dataset.homePage));
   document.querySelectorAll("[data-start-settlement]").forEach((button) => button.onclick = () => openWorkspace());
   document.querySelectorAll("[data-resume-id]").forEach((button) => button.onclick = () => { const settlement = state.settlements.find((item) => item.id === button.dataset.resumeId); if (settlement) openWorkspace(settlement); });
+  document.querySelectorAll("[data-admin-start-settlement]").forEach((button) => button.onclick = () => { openWorkspace(); setShift("pre"); });
+  document.querySelectorAll("[data-admin-post-settlement]").forEach((button) => button.onclick = () => { openWorkspace(); setShift("post"); });
 }
 
 function statusClass(status) { return status === "manager_approved" ? "approved" : status === "submitted" ? "submitted" : status === "rejected" ? "rejected" : "draft"; }
