@@ -334,9 +334,10 @@ function showDetail(settlement) {
   if (!settlement) return;
   const payload = settlement.payload || {};
   const items = payload.lotteryItems || [];
-  $("detailContent").innerHTML = `<div class="detail-grid"><div class="detail-box"><h4>기본 정보</h4><p>영업일: ${esc(settlement.businessDate)}<br>작성자: ${esc(settlement.author?.name || "-")}<br>상태: <b>${statusLabel(settlement.status)}</b><br>수정: ${dateTime(settlement.updatedAt)}</p></div><div class="detail-box"><h4>금액</h4><p>근무 전 금고: ${money(payload.preSafeAmount)}<br>현금 등록액: ${money(payload.cashAmount)}<br>근무 후 금고: ${money(payload.safeAmount)}<br>은행 이체: ${money(payload.bankTransferAmount)}<br>당첨금 지급: ${money(payload.prizePayoutAmount)}</p></div></div><div class="detail-box" style="margin-top:12px"><h4>인쇄복권 반품·재고·판매</h4><div class="table-like"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#647589"><th style="padding:7px 4px">품목/회차</th><th>전 반품</th><th>입고</th><th>중 반품</th><th>마감</th><th>판매</th></tr></thead><tbody>${items.map((item) => `<tr style="border-top:1px solid #edf1f3"><td style="padding:8px 4px">${esc(item.product)} / ${esc(item.draw)}</td><td>${num(item.preWorkReturn)}장</td><td>${num(item.restock)}장</td><td>${num(item.onDutyReturn)}장</td><td>${num(item.endingStock)}장</td><td><b>${num(item.soldQuantity)}장</b></td></tr>`).join("") || `<tr><td colspan="6" style="padding:10px 4px;color:#647589">입력된 품목이 없습니다.</td></tr>`}</tbody></table></div></div>${payload.handover || payload.memo ? `<div class="detail-box" style="margin-top:12px"><h4>인수인계·메모</h4><p>${esc(payload.handover || "")}<br>${esc(payload.memo || "")}</p></div>` : ""}${Array.isArray(payload.attachments) && payload.attachments.length ? `<div class="detail-box" style="margin-top:12px"><h4>사진 증빙 ${payload.attachments.length}장</h4><div class="photos">${payload.attachments.map((photo) => `<img src="${esc(photo.dataUrl)}" alt="증빙 사진" data-photo-src="${esc(photo.dataUrl)}">`).join("")}</div></div>` : ""}${Array.isArray(payload.approvalEvents) && payload.approvalEvents.length ? `<div class="detail-box" style="margin-top:12px"><h4>승인 이력</h4><p>${payload.approvalEvents.map((event) => `${esc(statusLabel(event.status))} · ${esc(event.actor?.name || "관리자")} · ${dateTime(event.createdAt)}`).join("<br>")}</p></div>` : ""}`;
+  $("detailContent").innerHTML = `<div class="detail-grid"><div class="detail-box"><h4>기본 정보</h4><p>영업일: ${esc(settlement.businessDate)}<br>작성자: ${esc(settlement.author?.name || "-")}<br>상태: <b>${statusLabel(settlement.status)}</b><br>수정: ${dateTime(settlement.updatedAt)}</p></div><div class="detail-box"><h4>금액</h4><p>근무 전 금고: ${money(payload.preSafeAmount)}<br>현금 등록액: ${money(payload.cashAmount)}<br>근무 후 금고: ${money(payload.safeAmount)}<br>은행 이체: ${money(payload.bankTransferAmount)}<br>당첨금 지급: ${money(payload.prizePayoutAmount)}</p></div></div><div class="detail-box" style="margin-top:12px"><h4>인쇄복권 반품·재고·판매</h4><div class="table-like"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#647589"><th style="padding:7px 4px">품목/회차</th><th>근무 전 반품</th><th>근무 후 입고</th><th>근무 후 반품</th><th>마감</th><th>판매</th></tr></thead><tbody>${items.map((item) => `<tr style="border-top:1px solid #edf1f3"><td style="padding:8px 4px">${esc(item.product)} / ${esc(item.draw)}</td><td>${num(item.preWorkReturn)}장</td><td>${num(item.restock)}장</td><td>${num(item.onDutyReturn)}장</td><td>${num(item.endingStock)}장</td><td><b>${num(item.soldQuantity)}장</b></td></tr>`).join("") || `<tr><td colspan="6" style="padding:10px 4px;color:#647589">입력된 품목이 없습니다.</td></tr>`}</tbody></table></div></div>${payload.handover || payload.memo ? `<div class="detail-box" style="margin-top:12px"><h4>인수인계·메모</h4><p>${esc(payload.handover || "")}<br>${esc(payload.memo || "")}</p></div>` : ""}${Array.isArray(payload.attachments) && payload.attachments.length ? `<div class="detail-box" style="margin-top:12px"><h4>사진 증빙 ${payload.attachments.length}장</h4><div class="photos">${payload.attachments.map((photo, index) => `<button class="photo-thumb" type="button" data-open-photo="${esc(photo.dataUrl)}" aria-label="증빙 사진 ${index + 1} 확대"><img src="${esc(photo.dataUrl)}" alt="증빙 사진 ${index + 1}"></button>`).join("")}</div></div>` : ""}${Array.isArray(payload.approvalEvents) && payload.approvalEvents.length ? `<div class="detail-box" style="margin-top:12px"><h4>승인 이력</h4><p>${payload.approvalEvents.map((event) => `${esc(statusLabel(event.status))} · ${esc(event.actor?.name || "관리자")} · ${dateTime(event.createdAt)}`).join("<br>")}</p></div>` : ""}`;
   $("detailModal").classList.remove("hidden");
   $("detailContent").querySelectorAll("[data-photo-src]").forEach((image) => image.addEventListener("click", () => openPhoto(image.dataset.photoSrc)));
+  $("detailContent").querySelectorAll("[data-open-photo]").forEach((button) => button.addEventListener("click", () => openPhoto(button.dataset.openPhoto)));
 }
 
 async function loadStaff() {
@@ -345,8 +346,29 @@ async function loadStaff() {
   try {
     const data = await api("/v1/web/admin/staff"), staff = data.staff || [];
     root.innerHTML = staff.length ? staff.map((item) => `<div class="staff-card"><div class="staff-meta"><strong>${esc(item.name)} ${item.role === "admin" ? "· 관리자" : "· 직원"}</strong><span>ID: ${esc(item.id)} · 웹 계정: ${esc(item.webUsername || "미연결")} · ${item.webActive ? "사용 중" : "사용 중지"}</span></div><div class="form-actions" style="margin:0">${item.webUsername ? `<button class="button secondary small" data-toggle-staff="${esc(item.id)}" data-next-active="${!item.webActive}" type="button">${item.webActive ? "웹 중지" : "웹 허용"}</button>` : ""}${item.role !== "admin" ? `<button class="button danger small" data-delete-staff="${esc(item.id)}" type="button">삭제</button>` : ""}</div></div>`).join("") : `<div class="empty">등록된 직원이 없습니다.</div>`;
-    root.querySelectorAll("[data-toggle-staff]").forEach((button) => button.onclick = async () => { try { await api(`/v1/web/admin/staff/${encodeURIComponent(button.dataset.toggleStaff)}/web-account`, { method: "PATCH", body: JSON.stringify({ active: button.dataset.nextActive === "true" }) }); await loadStaff(); } catch (error) { window.alert(error.message); } });
-    root.querySelectorAll("[data-delete-staff]").forEach((button) => button.onclick = async () => { if (!window.confirm("직원과 연결된 웹 세션을 삭제하시겠습니까?")) return; try { await api(`/v1/web/admin/staff/${encodeURIComponent(button.dataset.deleteStaff)}`, { method: "DELETE" }); setMessage("staffMsg", "직원이 삭제되고 연결된 웹 세션이 비활성화되었습니다.", "success"); await loadStaff(); } catch (error) { setMessage("staffMsg", error.message, "error"); } });
+    root.onclick = async (event) => {
+      const toggle = event.target.closest("[data-toggle-staff]");
+      const remove = event.target.closest("[data-delete-staff]");
+      if (!toggle && !remove) return;
+      event.preventDefault();
+      try {
+        if (toggle) {
+          toggle.disabled = true;
+          await api(`/v1/web/admin/staff/${encodeURIComponent(toggle.dataset.toggleStaff)}/web-account`, { method: "PATCH", body: JSON.stringify({ active: toggle.dataset.nextActive === "true" }) });
+          setMessage("staffMsg", toggle.dataset.nextActive === "true" ? "웹 계정을 다시 허용했습니다." : "웹 계정을 중지하고 세션을 해제했습니다.", "success");
+        } else {
+          if (!window.confirm("직원과 연결된 웹 세션을 삭제하시겠습니까?")) return;
+          remove.disabled = true;
+          await api(`/v1/web/admin/staff/${encodeURIComponent(remove.dataset.deleteStaff)}`, { method: "DELETE" });
+          setMessage("staffMsg", "직원이 삭제되고 연결된 웹 세션이 비활성화되었습니다.", "success");
+        }
+        await loadStaff();
+      } catch (error) {
+        setMessage("staffMsg", error.message, "error");
+        if (toggle) toggle.disabled = false;
+        if (remove) remove.disabled = false;
+      }
+    };
   } catch (error) { root.innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
 }
 
