@@ -41,6 +41,7 @@ const sessionTtlMs = 1000 * 60 * 60 * 24 * 30;
 
 const hashToken = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 const safeTokenEqual = (left: string, right: string) => crypto.timingSafeEqual(Buffer.from(hashToken(left)), Buffer.from(hashToken(right)));
+const settlementAmountFields = ["preSafeAmount", "safeAmount", "lottoSalesStart", "lottoSalesEnd", "lottoPayoutStart", "lottoPayoutEnd", "printedPayoutStart", "printedPayoutEnd", "bankTransferStart", "bankTransferEnd", "expectedSettlement"] as const;
 
 const hashPassword = (password: string) => {
   const salt = crypto.randomBytes(16);
@@ -373,6 +374,15 @@ export function registerWebRoutes(
     if (!id || id.length > 96 || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "정산 ID 또는 영업일 형식이 올바르지 않습니다." });
     const suppliedCreatedBy = (payload as any).createdBy;
     if (suppliedCreatedBy !== undefined && (typeof suppliedCreatedBy !== "object" || suppliedCreatedBy === null)) return response.status(400).json({ code: "INVALID_SETTLEMENT", message: "createdBy 형식이 올바르지 않습니다." });
+    const amounts = Object.fromEntries(settlementAmountFields.map((field) => [field, Number((payload as any)[field] ?? 0)])) as Record<string, number>;
+    if (Object.values(amounts).some((value) => !Number.isFinite(value) || value < 0)) return response.status(400).json({ code: "INVALID_SETTLEMENT_AMOUNTS", message: "APK 기준 정산 금액은 0 이상의 숫자여야 합니다." });
+    const lottoSalesDelta = amounts.lottoSalesEnd - amounts.lottoSalesStart;
+    const lottoPayoutDelta = amounts.lottoPayoutEnd - amounts.lottoPayoutStart;
+    const printedPayoutDelta = amounts.printedPayoutEnd - amounts.printedPayoutStart;
+    const bankTransferDelta = amounts.bankTransferEnd - amounts.bankTransferStart;
+    const actualSettlement = amounts.safeAmount + bankTransferDelta;
+    const varianceReason = typeof (payload as any).varianceReason === "string" ? (payload as any).varianceReason.trim().slice(0, 120) : "";
+    Object.assign(payload, amounts, { lottoSalesDelta, lottoPayoutDelta, printedPayoutDelta, bankTransferDelta, actualSettlement, settlementVariance: actualSettlement - amounts.expectedSettlement, varianceReason, bankTransferAmount: bankTransferDelta });
     const lotteryItems = (payload as any).lotteryItems;
     if (lotteryItems !== undefined) {
       if (!Array.isArray(lotteryItems)) return response.status(400).json({ code: "INVALID_LOTTERY_ITEMS", message: "복권 재고 데이터 형식이 올바르지 않습니다." });
@@ -387,6 +397,7 @@ export function registerWebRoutes(
       (payload as any).onDutyReturns = lotteryItems.map((item: any) => ({ product: item.product ?? "", draw: item.draw ?? "", quantity: item.onDutyReturn }));
     }
     const requestedStatus = typeof (payload as any).status === "string" ? (payload as any).status : "draft";
+    if (requestedStatus === "submitted" && Math.abs(Number((payload as any).settlementVariance ?? 0)) > 0 && !varianceReason) return response.status(400).json({ code: "VARIANCE_REASON_REQUIRED", message: "차액이 있는 경우 APK 기준 차액 사유를 입력해야 합니다." });
     const status = user.role === "employee"
       ? (["draft", "submitted"].includes(requestedStatus) ? requestedStatus : "draft")
       : (["draft", "submitted", "rejected"].includes(requestedStatus) ? requestedStatus : "draft");

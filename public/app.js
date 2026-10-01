@@ -79,14 +79,25 @@ function openWorkspace(settlement = null) {
   state.attachments = Array.isArray(settlement?.payload?.attachments) ? settlement.payload.attachments : [];
   $("businessDate").value = settlement?.businessDate || settlement?.payload?.businessDate || today();
   $("preSafeAmount").value = num(settlement?.payload?.preSafeAmount);
+  $("lottoSalesStart").value = num(settlement?.payload?.lottoSalesStart);
+  $("lottoPayoutStart").value = num(settlement?.payload?.lottoPayoutStart);
+  $("printedPayoutStart").value = num(settlement?.payload?.printedPayoutStart);
+  $("bankTransferStart").value = num(settlement?.payload?.bankTransferStart);
   $("cashAmount").value = num(settlement?.payload?.cashAmount);
   $("safeAmount").value = num(settlement?.payload?.safeAmount);
+  $("lottoSalesEnd").value = num(settlement?.payload?.lottoSalesEnd);
+  $("lottoPayoutEnd").value = num(settlement?.payload?.lottoPayoutEnd);
+  $("printedPayoutEnd").value = num(settlement?.payload?.printedPayoutEnd);
+  $("bankTransferEnd").value = num(settlement?.payload?.bankTransferEnd);
+  $("expectedSettlement").value = num(settlement?.payload?.expectedSettlement);
+  $("varianceReason").value = settlement?.payload?.varianceReason || "";
   $("bankTransferAmount").value = num(settlement?.payload?.bankTransferAmount);
   $("prizePayoutAmount").value = num(settlement?.payload?.prizePayoutAmount);
   $("handover").value = settlement?.payload?.handover || "";
   $("memo").value = settlement?.payload?.memo || "";
   renderRows(settlement?.payload?.lotteryItems || []);
   renderAttachments();
+  updateSettlementMath();
   setShift(settlement?.payload?.workflow?.preShift === "saved_or_entered" && settlement?.status === "draft" ? "post" : "pre");
   $("settlementWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -214,7 +225,32 @@ async function savePreShift() {
 
 function buildPayload({ status, lotteryItems, workflow }) {
   const id = state.editingId || `web-${state.user.staffId}-${Date.now()}`;
-  return { id, businessDate: $("businessDate").value || today(), createdBy: { id: state.user.staffId, name: state.user.staffName || state.user.username, role: state.user.role }, status, updatedAt: Date.now(), preSafeAmount: num($("preSafeAmount").value), cashAmount: num($("cashAmount").value), safeAmount: num($("safeAmount").value), bankTransferAmount: num($("bankTransferAmount").value), prizePayoutAmount: num($("prizePayoutAmount").value), handover: $("handover").value.trim(), memo: $("memo").value.trim(), workflow, lotteryItems, attachments: state.attachments };
+  const values = settlementMath();
+  return { id, businessDate: $("businessDate").value || today(), createdBy: { id: state.user.staffId, name: state.user.staffName || state.user.username, role: state.user.role }, status, updatedAt: Date.now(), ...values, cashAmount: num($("cashAmount").value), bankTransferAmount: values.bankTransferDelta, prizePayoutAmount: num($("prizePayoutAmount").value), handover: $("handover").value.trim(), memo: $("memo").value.trim(), workflow, lotteryItems, attachments: state.attachments };
+}
+
+function settlementMath() {
+  const value = (id) => num($(id)?.value);
+  const lottoSalesDelta = value("lottoSalesEnd") - value("lottoSalesStart");
+  const lottoPayoutDelta = value("lottoPayoutEnd") - value("lottoPayoutStart");
+  const printedPayoutDelta = value("printedPayoutEnd") - value("printedPayoutStart");
+  const bankTransferDelta = value("bankTransferEnd") - value("bankTransferStart");
+  const actualSettlement = value("safeAmount") + bankTransferDelta;
+  const expectedSettlement = value("expectedSettlement");
+  return { lottoSalesStart: value("lottoSalesStart"), lottoSalesEnd: value("lottoSalesEnd"), lottoSalesDelta, lottoPayoutStart: value("lottoPayoutStart"), lottoPayoutEnd: value("lottoPayoutEnd"), lottoPayoutDelta, printedPayoutStart: value("printedPayoutStart"), printedPayoutEnd: value("printedPayoutEnd"), printedPayoutDelta, bankTransferStart: value("bankTransferStart"), bankTransferEnd: value("bankTransferEnd"), bankTransferDelta, preSafeAmount: value("preSafeAmount"), safeAmount: value("safeAmount"), expectedSettlement, actualSettlement, settlementVariance: actualSettlement - expectedSettlement, varianceReason: $("varianceReason")?.value || "" };
+}
+
+function updateSettlementMath() {
+  const values = settlementMath();
+  const moneyText = (value) => `${Number(value || 0).toLocaleString("ko-KR")}원`;
+  [
+    ["lottoSalesDelta", values.lottoSalesDelta],
+    ["lottoPayoutDelta", values.lottoPayoutDelta],
+    ["printedPayoutDelta", values.printedPayoutDelta],
+    ["bankTransferDelta", values.bankTransferDelta],
+    ["actualSettlement", values.actualSettlement],
+    ["settlementVariance", values.settlementVariance],
+  ].forEach(([id, value]) => { if ($(id)) $(id).textContent = moneyText(value); });
 }
 
 async function submitSettlement() {
@@ -336,7 +372,7 @@ function showDetail(settlement) {
   if (!settlement) return;
   const payload = settlement.payload || {};
   const items = payload.lotteryItems || [];
-  $("detailContent").innerHTML = `<div class="detail-grid"><div class="detail-box"><h4>기본 정보</h4><p>영업일: ${esc(settlement.businessDate)}<br>작성자: ${esc(settlement.author?.name || "-")}<br>상태: <b>${statusLabel(settlement.status)}</b><br>수정: ${dateTime(settlement.updatedAt)}</p></div><div class="detail-box"><h4>금액</h4><p>근무 전 금고: ${money(payload.preSafeAmount)}<br>현금 등록액: ${money(payload.cashAmount)}<br>근무 후 금고: ${money(payload.safeAmount)}<br>은행 이체: ${money(payload.bankTransferAmount)}<br>당첨금 지급: ${money(payload.prizePayoutAmount)}</p></div></div><div class="detail-box" style="margin-top:12px"><h4>인쇄복권 반품·재고·판매</h4><div class="table-like"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#647589"><th style="padding:7px 4px">품목/회차</th><th>근무 전 반품</th><th>근무 후 입고</th><th>근무 후 반품</th><th>마감</th><th>판매</th></tr></thead><tbody>${items.map((item) => `<tr style="border-top:1px solid #edf1f3"><td style="padding:8px 4px">${esc(item.product)} / ${esc(item.draw)}</td><td>${num(item.preWorkReturn)}장</td><td>${num(item.restock)}장</td><td>${num(item.onDutyReturn)}장</td><td>${num(item.endingStock)}장</td><td><b>${num(item.soldQuantity)}장</b></td></tr>`).join("") || `<tr><td colspan="6" style="padding:10px 4px;color:#647589">입력된 품목이 없습니다.</td></tr>`}</tbody></table></div></div>${payload.handover || payload.memo ? `<div class="detail-box" style="margin-top:12px"><h4>인수인계·메모</h4><p>${esc(payload.handover || "")}<br>${esc(payload.memo || "")}</p></div>` : ""}${Array.isArray(payload.attachments) && payload.attachments.length ? `<div class="detail-box" style="margin-top:12px"><h4>사진 증빙 ${payload.attachments.length}장</h4><div class="photos">${payload.attachments.map((photo, index) => `<button class="photo-thumb" type="button" data-open-photo="${esc(photo.dataUrl)}" aria-label="증빙 사진 ${index + 1} 확대"><img src="${esc(photo.dataUrl)}" alt="증빙 사진 ${index + 1}"></button>`).join("")}</div></div>` : ""}${Array.isArray(payload.approvalEvents) && payload.approvalEvents.length ? `<div class="detail-box" style="margin-top:12px"><h4>승인 이력</h4><p>${payload.approvalEvents.map((event) => `${esc(statusLabel(event.status))} · ${esc(event.actor?.name || "관리자")} · ${dateTime(event.createdAt)}`).join("<br>")}</p></div>` : ""}`;
+  $("detailContent").innerHTML = `<div class="detail-grid"><div class="detail-box"><h4>기본 정보</h4><p>영업일: ${esc(settlement.businessDate)}<br>작성자: ${esc(settlement.author?.name || "-")}<br>상태: <b>${statusLabel(settlement.status)}</b><br>수정: ${dateTime(settlement.updatedAt)}</p></div><div class="detail-box"><h4>APK 금액 정산</h4><p>시제·금고: ${money(payload.preSafeAmount)} → ${money(payload.safeAmount)}<br>로또 판매: ${money(payload.lottoSalesStart)} → ${money(payload.lottoSalesEnd)} (${money(payload.lottoSalesDelta)})<br>로또 지급: ${money(payload.lottoPayoutStart)} → ${money(payload.lottoPayoutEnd)} (${money(payload.lottoPayoutDelta)})<br>인쇄복권 지급: ${money(payload.printedPayoutStart)} → ${money(payload.printedPayoutEnd)} (${money(payload.printedPayoutDelta)})<br>계좌 입금: ${money(payload.bankTransferStart)} → ${money(payload.bankTransferEnd)} (${money(payload.bankTransferDelta)})<br>예상 정산: ${money(payload.expectedSettlement)}<br>실제 정산: ${money(payload.actualSettlement)}<br>차액: ${money(payload.settlementVariance)}${payload.varianceReason ? ` · ${esc(payload.varianceReason)}` : ""}<br>당첨금 지급: ${money(payload.prizePayoutAmount)}</p></div></div><div class="detail-box" style="margin-top:12px"><h4>인쇄복권 반품·재고·판매</h4><div class="table-like"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#647589"><th style="padding:7px 4px">품목/회차</th><th>근무 전 반품</th><th>근무 후 입고</th><th>근무 후 반품</th><th>마감</th><th>판매</th></tr></thead><tbody>${items.map((item) => `<tr style="border-top:1px solid #edf1f3"><td style="padding:8px 4px">${esc(item.product)} / ${esc(item.draw)}</td><td>${num(item.preWorkReturn)}장</td><td>${num(item.restock)}장</td><td>${num(item.onDutyReturn)}장</td><td>${num(item.endingStock)}장</td><td><b>${num(item.soldQuantity)}장</b></td></tr>`).join("") || `<tr><td colspan="6" style="padding:10px 4px;color:#647589">입력된 품목이 없습니다.</td></tr>`}</tbody></table></div></div>${payload.handover || payload.memo ? `<div class="detail-box" style="margin-top:12px"><h4>인수인계·메모</h4><p>${esc(payload.handover || "")}<br>${esc(payload.memo || "")}</p></div>` : ""}${Array.isArray(payload.attachments) && payload.attachments.length ? `<div class="detail-box" style="margin-top:12px"><h4>사진 증빙 ${payload.attachments.length}장</h4><div class="photos">${payload.attachments.map((photo, index) => `<button class="photo-thumb" type="button" data-open-photo="${esc(photo.dataUrl)}" aria-label="증빙 사진 ${index + 1} 확대"><img src="${esc(photo.dataUrl)}" alt="증빙 사진 ${index + 1}"></button>`).join("")}</div></div>` : ""}${Array.isArray(payload.approvalEvents) && payload.approvalEvents.length ? `<div class="detail-box" style="margin-top:12px"><h4>승인 이력</h4><p>${payload.approvalEvents.map((event) => `${esc(statusLabel(event.status))} · ${esc(event.actor?.name || "관리자")} · ${dateTime(event.createdAt)}`).join("<br>")}</p></div>` : ""}`;
   $("detailModal").classList.remove("hidden");
   $("detailContent").querySelectorAll("[data-photo-src]").forEach((image) => image.addEventListener("click", () => openPhoto(image.dataset.photoSrc)));
   $("detailContent").querySelectorAll("[data-open-photo]").forEach((button) => button.addEventListener("click", () => openPhoto(button.dataset.openPhoto)));
@@ -409,6 +445,7 @@ $("refreshBtn")?.addEventListener("click", loadHistory);
 $("refreshInventoryBtn")?.addEventListener("click", loadInventory);
 $("refreshApprovalBtn")?.addEventListener("click", loadApproval);
 $("refreshDevicesBtn")?.addEventListener("click", loadDevices);
+document.querySelectorAll("#settlementWorkspace input, #settlementWorkspace select").forEach((input) => input.addEventListener("input", updateSettlementMath));
 $("closeDetailBtn")?.addEventListener("click", () => $("detailModal").classList.add("hidden"));
 $("detailModal")?.addEventListener("click", (event) => { if (event.target === $("detailModal")) $("detailModal").classList.add("hidden"); });
 $("photoClose")?.addEventListener("click", closePhoto);
