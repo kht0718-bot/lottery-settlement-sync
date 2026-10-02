@@ -5,6 +5,7 @@ const state = {
   editingId: null,
   attachments: [],
   photoScale: 1,
+  carryover: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -76,6 +77,7 @@ function setShift(shift) {
 function openWorkspace(settlement = null) {
   $("settlementWorkspace")?.classList.remove("hidden");
   state.editingId = settlement?.id || null;
+  state.carryover = null;
   state.attachments = Array.isArray(settlement?.payload?.attachments) ? settlement.payload.attachments : [];
   $("businessDate").value = settlement?.businessDate || settlement?.payload?.businessDate || today();
   $("preSafeAmount").value = num(settlement?.payload?.preSafeAmount);
@@ -83,6 +85,7 @@ function openWorkspace(settlement = null) {
   $("lottoPayoutStart").value = num(settlement?.payload?.lottoPayoutStart);
   $("printedPayoutStart").value = num(settlement?.payload?.printedPayoutStart);
   $("bankTransferStart").value = num(settlement?.payload?.bankTransferStart);
+  $("preSafeChangeReason").value = settlement?.payload?.preSafeChangeReason || "";
   $("cashAmount").value = num(settlement?.payload?.cashAmount);
   $("safeAmount").value = num(settlement?.payload?.safeAmount);
   $("lottoSalesEnd").value = num(settlement?.payload?.lottoSalesEnd);
@@ -106,6 +109,7 @@ function closeWorkspace() {
   $("settlementWorkspace")?.classList.add("hidden");
   state.editingId = null;
   state.attachments = [];
+  state.carryover = null;
 }
 
 function productOptions(selected = "스피또1000") {
@@ -214,6 +218,7 @@ async function compressPhoto(file) {
 
 async function savePreShift() {
   try {
+    if (state.carryover && num($("preSafeAmount").value) !== num(state.carryover.safeAmount) && !$("preSafeChangeReason")?.value) throw new Error("직전 승인 금고와 다른 시제는 APK 기준 변동 사유를 선택해야 합니다.");
     const lotteryItems = readRows();
     const payload = buildPayload({ status: "draft", lotteryItems, workflow: { preShift: "saved_or_entered", postShift: "not_started" } });
     await api("/v1/web/settlements", { method: "POST", body: JSON.stringify({ payload }) });
@@ -226,7 +231,7 @@ async function savePreShift() {
 function buildPayload({ status, lotteryItems, workflow }) {
   const id = state.editingId || `web-${state.user.staffId}-${Date.now()}`;
   const values = settlementMath();
-  return { id, businessDate: $("businessDate").value || today(), createdBy: { id: state.user.staffId, name: state.user.staffName || state.user.username, role: state.user.role }, status, updatedAt: Date.now(), ...values, cashAmount: num($("cashAmount").value), bankTransferAmount: values.bankTransferDelta, prizePayoutAmount: num($("prizePayoutAmount").value), handover: $("handover").value.trim(), memo: $("memo").value.trim(), workflow, lotteryItems, attachments: state.attachments };
+  return { id, businessDate: $("businessDate").value || today(), createdBy: { id: state.user.staffId, name: state.user.staffName || state.user.username, role: state.user.role }, status, updatedAt: Date.now(), ...values, preSafeChangeReason: $("preSafeChangeReason")?.value || "", cashAmount: num($("cashAmount").value), bankTransferAmount: values.bankTransferDelta, prizePayoutAmount: num($("prizePayoutAmount").value), handover: $("handover").value.trim(), memo: $("memo").value.trim(), workflow, lotteryItems, attachments: state.attachments };
 }
 
 function settlementMath() {
@@ -268,8 +273,10 @@ async function submitSettlement() {
 async function loadCarryover() {
   try {
     const data = await api("/v1/web/settlements?limit=500");
+    const approved = (data.settlements || []).filter((item) => item.status === "manager_approved");
+    const latestSettlement = approved[0];
     const latest = new Map();
-    (data.settlements || []).filter((item) => item.status === "manager_approved").forEach((settlement) => {
+    approved.forEach((settlement) => {
       (settlement.payload?.lotteryItems || []).forEach((item) => {
         const key = rowKey(item), previous = latest.get(key);
         if (!previous || Number(settlement.updatedAt) > Number(previous.updatedAt)) latest.set(key, { updatedAt: settlement.updatedAt, item });
@@ -277,7 +284,18 @@ async function loadCarryover() {
     });
     const carry = [...latest.values()].map(({ item }) => ({ product: item.product, draw: item.draw, originalStock: num(item.endingStock), preWorkReturn: 0, restock: 0, onDutyReturn: 0, endingStock: 0 }));
     renderRows(carry);
-    setMessage("formMsg", carry.length ? "승인된 마감 재고를 근무 전 원재고로 불러왔습니다." : "불러올 승인 완료 재고가 없습니다.", carry.length ? "success" : "muted");
+    if (latestSettlement?.payload) {
+      const previous = latestSettlement.payload;
+      state.carryover = { safeAmount: num(previous.safeAmount), lottoSalesEnd: num(previous.lottoSalesEnd), lottoPayoutEnd: num(previous.lottoPayoutEnd), printedPayoutEnd: num(previous.printedPayoutEnd), bankTransferEnd: num(previous.bankTransferEnd) };
+      $("preSafeAmount").value = state.carryover.safeAmount;
+      $("lottoSalesStart").value = state.carryover.lottoSalesEnd;
+      $("lottoPayoutStart").value = state.carryover.lottoPayoutEnd;
+      $("printedPayoutStart").value = state.carryover.printedPayoutEnd;
+      $("bankTransferStart").value = state.carryover.bankTransferEnd;
+      updateSettlementMath();
+    }
+    const loaded = Boolean(carry.length || latestSettlement);
+    setMessage("formMsg", loaded ? "승인된 이전 정산의 재고·금액을 근무 전 시작값으로 불러왔습니다." : "불러올 승인 완료 정산이 없습니다.", loaded ? "success" : "muted");
   } catch (error) { setMessage("formMsg", error.message, "error"); }
 }
 
