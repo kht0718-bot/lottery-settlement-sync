@@ -34,6 +34,7 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 const num = (value) => Math.max(0, Number(value || 0));
 const money = (value) => `${Number(value || 0).toLocaleString("ko-KR")}원`;
 const dateTime = (value) => value ? new Date(Number(value)).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" }) : "-";
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const today = () => new Date().toISOString().slice(0, 10);
 const setMessage = (id, text, type = "muted") => { const element = $(id); if (element) { element.textContent = text; element.className = type; } };
 const rowKey = (item) => `${String(item.product || "").trim()}|${String(item.draw || "").trim()}`;
@@ -383,7 +384,15 @@ async function loadApproval() {
 
 async function transition(id, action) {
   if (action === "reject" && !window.confirm("이 정산을 반려하시겠습니까?")) return;
-  try { await api(`/v1/web/settlements/${encodeURIComponent(id)}/${action}`, { method: "POST" }); await loadHome(); await loadHistory(); await loadApproval(); await loadInventory(); } catch (error) { window.alert(error.message); }
+  try {
+    await api(`/v1/web/settlements/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+    // The APK keeps syncing after a state transition. Retry the shared list briefly
+    // so the web does not show stale approval/inventory data immediately after commit.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await Promise.all([loadHome(), loadHistory(), loadApproval(), loadInventory()]);
+      if (attempt < 3) await wait(500 * (attempt + 1));
+    }
+  } catch (error) { window.alert(error.message); }
 }
 
 function showDetail(settlement) {
