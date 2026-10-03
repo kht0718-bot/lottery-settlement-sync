@@ -440,10 +440,12 @@ export function registerWebRoutes(
         "INSERT INTO settlements (id,business_date,author_id,author_name,author_role,settlement_status,updated_at,payload_json) VALUES (?,?,?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO UPDATE SET business_date=EXCLUDED.business_date, author_name=EXCLUDED.author_name, settlement_status=EXCLUDED.settlement_status, updated_at=EXCLUDED.updated_at, payload_json=EXCLUDED.payload_json",
         [id, businessDate, finalAuthorId, finalAuthorName, finalAuthorRole, status, updatedAt, JSON.stringify(payload)]
       );
+      const eventId = crypto.randomUUID();
       await connection.execute(
         "INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO NOTHING",
-        [crypto.randomUUID(), id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: user.role }, status })]
+        [eventId, id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: user.role }, status })]
       );
+      await connection.execute("INSERT INTO main_sync_outbox (event_id,settlement_id,event_type,created_at) VALUES (?,?,?,?)", [eventId, id, existing ? "updated" : "created", updatedAt]);
       await connection.commit();
       response.status(existing ? 200 : 201).json({ ok: true, id });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
@@ -473,7 +475,9 @@ export function registerWebRoutes(
       // other clients can pull the approval immediately from the shared sync store.
       payload.syncState = "server_synced";
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
-      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [crypto.randomUUID(), id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: "admin" }, status: nextStatus })]);
+      const eventId = crypto.randomUUID();
+      await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [eventId, id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: "admin" }, status: nextStatus })]);
+      await connection.execute("INSERT INTO main_sync_outbox (event_id,settlement_id,event_type,created_at) VALUES (?,?,?,?)", [eventId, id, nextStatus, now]);
       await connection.commit();
       response.json({ ok: true, id, status: nextStatus, payload });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }

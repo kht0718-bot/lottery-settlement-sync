@@ -7,6 +7,7 @@ import { createDatabasePool } from "./pg-compat.js";
 import { z } from "zod";
 import { registerStaffSyncRoutes } from "./staff-sync.js";
 import { registerWebRoutes } from "./web-routes.js";
+import { createMainSync } from "./main-sync.js";
 
 const required = (name: string) => {
   const value = process.env[name];
@@ -15,6 +16,7 @@ const required = (name: string) => {
 };
 
 const webEnabled = String(process.env.WEB_ENABLED ?? "false").toLowerCase() === "true";
+const mainSyncEnabled = String(process.env.MAIN_SYNC_ENABLED ?? "false").toLowerCase() === "true";
 
 const rawDatabaseUrl = required("DATABASE_URL");
 const normalizeDatabaseUrl = (value: string) => {
@@ -119,6 +121,10 @@ const schemaStatements = [
     `CREATE TABLE IF NOT EXISTS web_sessions (
       id VARCHAR(96) PRIMARY KEY, userId VARCHAR(64) NOT NULL, tokenHash CHAR(64) NOT NULL UNIQUE,
       expiresAt BIGINT NOT NULL, createdAt BIGINT NOT NULL, lastSeenAt BIGINT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS main_sync_outbox (
+      id BIGSERIAL PRIMARY KEY, event_id VARCHAR(96) NOT NULL UNIQUE, settlement_id VARCHAR(96) NOT NULL,
+      event_type VARCHAR(60) NOT NULL, created_at BIGINT NOT NULL, synced_at BIGINT NULL
     )`,
   ] : []),
   `CREATE INDEX IF NOT EXISTS idx_settlements_date ON settlements (business_date)`,
@@ -435,6 +441,15 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
   if (status === 413) return response.status(413).json({ code: "REQUEST_TOO_LARGE", message: "전송 데이터가 너무 큽니다. 증빙사진은 최대 8장으로 줄여 다시 시도해 주세요." });
   response.status(500).json({ message: "서버 처리 중 오류가 발생했습니다." });
 });
+const mainSync = createMainSync({
+  enabled: mainSyncEnabled && webEnabled,
+  baseUrl: process.env.MAIN_SYNC_BASE_URL ?? "",
+  pairCode: process.env.MAIN_SYNC_PAIR_CODE ?? "",
+  deviceName: process.env.MAIN_SYNC_DEVICE_NAME ?? "Web settlement bridge",
+  deviceFingerprint: process.env.MAIN_SYNC_DEVICE_FINGERPRINT ?? "web-main-bridge",
+  staffId: process.env.MAIN_SYNC_STAFF_ID,
+}, pool);
+if (mainSync.enabled) setInterval(() => { void mainSync.sync(); }, 15_000);
 process.on("unhandledRejection", (error) => process.stderr.write(`unhandled rejection: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`));
 process.on("uncaughtException", (error) => process.stderr.write(`uncaught exception: ${error.stack ?? error.message}\n`));
 app.listen(port, () => {
@@ -443,4 +458,5 @@ app.listen(port, () => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);
     process.stderr.write(`lottery sync API database initialization failed; service remains available for health/static diagnostics: ${message}\n`);
   });
+  if (mainSync.enabled) setTimeout(() => { void mainSync.sync(); }, 2_000);
 });
