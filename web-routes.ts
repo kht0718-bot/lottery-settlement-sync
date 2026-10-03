@@ -64,7 +64,7 @@ const disabled = (response: Response) => response.status(503).json({ code: "WEB_
 export function registerWebRoutes(
   app: WebApp,
   pool: PgCompatPool,
-  options: { webEnabled: boolean; adminApiToken: string }
+  options: { webEnabled: boolean; adminApiToken: string; mainSyncEnabled?: boolean }
 ) {
   if (!options.webEnabled) {
     app.all("/v1/web/*", (_request: Request, response: Response) => {
@@ -445,7 +445,7 @@ export function registerWebRoutes(
         "INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb) ON CONFLICT (id) DO NOTHING",
         [eventId, id, "web:" + user.staffId, existing ? "updated" : "created", updatedAt, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: user.role }, status })]
       );
-      await connection.execute("INSERT INTO main_sync_outbox (event_id,settlement_id,event_type,created_at) VALUES (?,?,?,?)", [eventId, id, existing ? "updated" : "created", updatedAt]);
+      if (options.mainSyncEnabled) await connection.execute("INSERT INTO main_sync_outbox (event_id,settlement_id,event_type,created_at) VALUES (?,?,?,?)", [eventId, id, existing ? "updated" : "created", updatedAt]);
       await connection.commit();
       response.status(existing ? 200 : 201).json({ ok: true, id });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
@@ -477,7 +477,7 @@ export function registerWebRoutes(
       await connection.execute("UPDATE settlements SET settlement_status=?, updated_at=?, payload_json=?::jsonb WHERE id=?", [nextStatus, now, JSON.stringify(payload), id]);
       const eventId = crypto.randomUUID();
       await connection.execute("INSERT INTO settlement_events (id,settlement_id,device_id,event_type,created_at,payload_json) VALUES (?,?,?,?,?,?::jsonb)", [eventId, id, "web:" + user.staffId, nextStatus, now, JSON.stringify({ source: "web", actor: { id: user.staffId, name: user.staffName, role: "admin" }, status: nextStatus })]);
-      await connection.execute("INSERT INTO main_sync_outbox (event_id,settlement_id,event_type,created_at) VALUES (?,?,?,?)", [eventId, id, nextStatus, now]);
+      if (options.mainSyncEnabled) await connection.execute("INSERT INTO main_sync_outbox (event_id,settlement_id,event_type,created_at) VALUES (?,?,?,?)", [eventId, id, nextStatus, now]);
       await connection.commit();
       response.json({ ok: true, id, status: nextStatus, payload });
     } catch (error) { await connection.rollback(); next(error); } finally { connection.release(); }
