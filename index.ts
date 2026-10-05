@@ -127,6 +127,10 @@ const schemaStatements = [
       id BIGSERIAL PRIMARY KEY, event_id VARCHAR(96) NOT NULL UNIQUE, settlement_id VARCHAR(96) NOT NULL,
       event_type VARCHAR(60) NOT NULL, created_at BIGINT NOT NULL, synced_at BIGINT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS main_staff_sync_outbox (
+      id BIGSERIAL PRIMARY KEY, staff_id VARCHAR(64) NOT NULL, change_type VARCHAR(20) NOT NULL,
+      version BIGINT NOT NULL, payload_json JSONB NOT NULL, created_at BIGINT NOT NULL, synced_at BIGINT NULL
+    )`,
   ] : []),
   `CREATE INDEX IF NOT EXISTS idx_settlements_date ON settlements (business_date)`,
   `CREATE INDEX IF NOT EXISTS idx_settlements_updated ON settlements (updated_at)`,

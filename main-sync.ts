@@ -83,6 +83,19 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
           await pool.execute("UPDATE main_sync_outbox SET synced_at=? WHERE event_id = ANY(?)", [Date.now(), events.map((event) => event.id)]);
         }
       }
+      if (options.pushEnabled) {
+        const [staffOutbox] = await pool.query<Array<{ id: string; staff_id: string; change_type: string; version: number; payload_json: unknown }>>(
+          "SELECT id,staff_id,change_type,version,payload_json FROM main_staff_sync_outbox WHERE synced_at IS NULL ORDER BY created_at ASC LIMIT 100"
+        );
+        if (staffOutbox.length) {
+          const changes = staffOutbox.map((item) => ({
+            changeType: item.change_type,
+            payload: typeof item.payload_json === "string" ? JSON.parse(item.payload_json) : item.payload_json,
+          }));
+          await authorized("/v1/staff/changes", { method: "POST", body: JSON.stringify({ changes }) });
+          await pool.execute("UPDATE main_staff_sync_outbox SET synced_at=? WHERE id = ANY(?)", [Date.now(), staffOutbox.map((item) => item.id)]);
+        }
+      }
       const changes = await authorized("/v1/sync/changes");
       for (const incoming of Array.isArray(changes?.settlements) ? changes.settlements : []) {
         if (!incoming || typeof incoming !== "object" || typeof incoming.id !== "string") continue;

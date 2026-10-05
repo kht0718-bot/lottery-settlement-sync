@@ -281,6 +281,14 @@ export function registerWebRoutes(
         "INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,NULL)",
         [id, name, null, "employee", "active", 1, now, now]
       );
+      await pool.execute(
+        "INSERT INTO settlement_staff_change_log (staffId,changeType,version,payloadJson,changedBy,changedAt) VALUES (?,?,?,?,?,?)",
+        [id, "created", 1, JSON.stringify({ id, name, phone: null, role: "employee", status: "active", version: 1, updatedAt: now, deletedAt: null }), request.webUser!.staffId, now]
+      );
+      await pool.execute(
+        "INSERT INTO main_staff_sync_outbox (staff_id,change_type,version,payload_json,created_at) VALUES (?,?,?,?,?)",
+        [id, "created", 1, JSON.stringify({ id, name, phone: null, role: "employee", status: "active", version: 1, updatedAt: now, deletedAt: null }), now]
+      );
       response.status(201).json({ id, name, role: "employee", status: "active" });
     } catch (error) { next(error); }
   });
@@ -293,7 +301,12 @@ export function registerWebRoutes(
       if (!staff) return response.status(404).json({ code: "STAFF_NOT_FOUND", message: "직원을 찾을 수 없습니다." });
       if (staff.role === "admin") return response.status(400).json({ code: "ADMIN_DELETE_FORBIDDEN", message: "관리자 계정은 직원 관리에서 삭제할 수 없습니다." });
       const now = Date.now();
-      await pool.execute("UPDATE settlement_staff SET status='deleted', deletedAt=?, updatedAt=? WHERE id=?", [now, now, staffId]);
+      const [versionRows] = await pool.query<Array<{ version: number; name: string; phone: string | null; role: WebRole }>>("SELECT version,name,phone,role FROM settlement_staff WHERE id=? LIMIT 1", [staffId]);
+      const nextVersion = Number(versionRows[0]?.version ?? 0) + 1;
+      await pool.execute("UPDATE settlement_staff SET status='deleted', version=?, deletedAt=?, updatedAt=? WHERE id=?", [nextVersion, now, now, staffId]);
+      const deletedPayload = { id: staffId, name: versionRows[0]?.name ?? "", phone: versionRows[0]?.phone ?? null, role: versionRows[0]?.role ?? "employee", status: "deleted", version: nextVersion, updatedAt: now, deletedAt: now };
+      await pool.execute("INSERT INTO settlement_staff_change_log (staffId,changeType,version,payloadJson,changedBy,changedAt) VALUES (?,?,?,?,?,?)", [staffId, "deleted", nextVersion, JSON.stringify(deletedPayload), request.webUser!.staffId, now]);
+      await pool.execute("INSERT INTO main_staff_sync_outbox (staff_id,change_type,version,payload_json,created_at) VALUES (?,?,?,?,?)", [staffId, "deleted", nextVersion, JSON.stringify(deletedPayload), now]);
       await pool.execute("UPDATE web_users SET active=FALSE, updatedAt=? WHERE staffId=?", [now, staffId]);
       await pool.execute("DELETE FROM web_sessions WHERE userId IN (SELECT id FROM web_users WHERE staffId=?)", [staffId]);
       response.json({ ok: true, staffId });
