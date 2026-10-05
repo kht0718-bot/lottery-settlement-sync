@@ -28,9 +28,11 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
   const enabled = options.enabled && Boolean(baseUrl && options.pairCode);
   let running: Promise<void> | null = null;
   let blockedUntil = 0;
+  let staffCursor = 0;
 
   const pair = async () => {
     if (!enabled) return;
+    const hadPreviousPair = Boolean(state.token && state.deviceId);
     const result = await jsonFetch(`${baseUrl}/v1/pair`, {
       method: "POST",
       body: JSON.stringify({ pairCode: options.pairCode, deviceName: options.deviceName, deviceFingerprint: options.deviceFingerprint, staffId: options.staffId }),
@@ -38,6 +40,13 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
     state.token = String(result.token ?? "");
     state.deviceId = String(result.deviceId ?? "");
     if (!state.token || !state.deviceId) throw new Error("Main sync pairing response is incomplete");
+    if (hadPreviousPair && result.reconnected === false) {
+      await pool.execute("DELETE FROM settlement_events");
+      await pool.execute("DELETE FROM settlements");
+      await pool.execute("DELETE FROM main_sync_outbox");
+      staffCursor = 0;
+      console.warn("[MAIN_SYNC_RESET_APPLIED] Main device registration was recreated; local sync data cleared");
+    }
   };
 
   const authorized = async (path: string, init: RequestInit = {}) => {
@@ -88,6 +97,17 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
           [id, businessDate, String(createdBy.id), String(createdBy.name), String(createdBy.role), String(payload.status ?? "draft"), updatedAt, JSON.stringify(payload)]
         );
       }
+      const staffChanges = await authorized(`/v1/staff/changes?cursor=${staffCursor}`);
+      for (const change of Array.isArray(staffChanges?.changes) ? staffChanges.changes : []) {
+        const record = change?.payload;
+        if (!record || typeof record.id !== "string" || !Number.isFinite(Number(record.version))) continue;
+        await pool.execute(
+          "INSERT INTO settlement_staff (id,name,phone,role,status,version,createdAt,updatedAt,deletedAt) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,phone=EXCLUDED.phone,role=EXCLUDED.role,status=EXCLUDED.status,version=EXCLUDED.version,updatedAt=EXCLUDED.updatedAt,deletedAt=EXCLUDED.deletedAt WHERE EXCLUDED.version >= settlement_staff.version",
+          [String(record.id), String(record.name ?? ""), record.phone ?? null, String(record.role ?? "employee"), String(record.status ?? "active"), Number(record.version), Number(record.updatedAt ?? change.changedAt), Number(record.updatedAt ?? change.changedAt), record.deletedAt ?? null]
+        );
+        await pool.execute("UPDATE web_users SET active=?, role=?, updatedAt=? WHERE staffId=?", [String(record.status ?? "active") === "active", String(record.role ?? "employee"), Number(record.updatedAt ?? change.changedAt), String(record.id)]);
+      }
+      if (Number.isFinite(Number(staffChanges?.cursor))) staffCursor = Number(staffChanges.cursor);
     })().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       if (message.startsWith("Main sync 429")) blockedUntil = Date.now() + 15 * 60 * 1000;
