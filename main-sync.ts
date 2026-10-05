@@ -27,6 +27,7 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const enabled = options.enabled && Boolean(baseUrl && options.pairCode);
   let running: Promise<void> | null = null;
+  let blockedUntil = 0;
 
   const pair = async () => {
     if (!enabled) return;
@@ -54,7 +55,7 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
   };
 
   const sync = async () => {
-    if (!enabled || running) return running;
+    if (!enabled || running || blockedUntil > Date.now()) return running;
     running = (async () => {
       const [outbox] = options.pushEnabled ? await pool.query<Array<{ id: string; event_id: string; settlement_id: string; event_type: string }>>(
         "SELECT id,event_id,settlement_id,event_type FROM main_sync_outbox WHERE synced_at IS NULL ORDER BY created_at ASC LIMIT 100"
@@ -87,7 +88,11 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
           [id, businessDate, String(createdBy.id), String(createdBy.name), String(createdBy.role), String(payload.status ?? "draft"), updatedAt, JSON.stringify(payload)]
         );
       }
-    })().catch((error) => { console.warn("[MAIN_SYNC_FAILED]", error instanceof Error ? error.message : String(error)); }).finally(() => { running = null; });
+    })().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith("Main sync 429")) blockedUntil = Date.now() + 15 * 60 * 1000;
+      console.warn("[MAIN_SYNC_FAILED]", message);
+    }).finally(() => { running = null; });
     return running;
   };
 
