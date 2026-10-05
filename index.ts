@@ -17,6 +17,7 @@ const required = (name: string) => {
 
 const webEnabled = String(process.env.WEB_ENABLED ?? "false").toLowerCase() === "true";
 const mainSyncEnabled = String(process.env.MAIN_SYNC_ENABLED ?? "false").toLowerCase() === "true";
+const mainSyncPushEnabled = String(process.env.MAIN_SYNC_PUSH_ENABLED ?? "false").toLowerCase() === "true";
 
 const rawDatabaseUrl = required("DATABASE_URL");
 const normalizeDatabaseUrl = (value: string) => {
@@ -237,7 +238,7 @@ const requireDevice = async (request: Request, response: Response, next: NextFun
 
 registerStaffSyncRoutes(app, pool, requireDevice);
 
-registerWebRoutes(app, pool, { webEnabled, adminApiToken, mainSyncEnabled });
+registerWebRoutes(app, pool, { webEnabled, adminApiToken, mainSyncPushEnabled });
 
 const pairingAttempts = new Map<string, { count: number; resetAt: number }>();
 const permitPairing = (request: Request) => {
@@ -443,6 +444,7 @@ app.use((error: unknown, _request: Request, response: Response, _next: NextFunct
 });
 const mainSync = createMainSync({
   enabled: mainSyncEnabled && webEnabled,
+  pushEnabled: mainSyncPushEnabled,
   baseUrl: process.env.MAIN_SYNC_BASE_URL ?? "",
   pairCode: process.env.MAIN_SYNC_PAIR_CODE ?? "",
   deviceName: process.env.MAIN_SYNC_DEVICE_NAME ?? "Web settlement bridge",

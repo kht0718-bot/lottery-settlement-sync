@@ -2,6 +2,7 @@ import type { PgCompatPool } from "./pg-compat.js";
 
 type MainSyncOptions = {
   enabled: boolean;
+  pushEnabled: boolean;
   baseUrl: string;
   pairCode: string;
   deviceName: string;
@@ -55,9 +56,9 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
   const sync = async () => {
     if (!enabled || running) return running;
     running = (async () => {
-      const [outbox] = await pool.query<Array<{ id: string; event_id: string; settlement_id: string; event_type: string }>>(
+      const [outbox] = options.pushEnabled ? await pool.query<Array<{ id: string; event_id: string; settlement_id: string; event_type: string }>>(
         "SELECT id,event_id,settlement_id,event_type FROM main_sync_outbox WHERE synced_at IS NULL ORDER BY created_at ASC LIMIT 100"
-      );
+      ) : [[]];
       if (outbox.length) {
         const events: any[] = [];
         for (const item of outbox) {
