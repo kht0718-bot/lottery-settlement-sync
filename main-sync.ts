@@ -22,6 +22,13 @@ const jsonFetch = async (url: string, init: RequestInit = {}) => {
   if (!response.ok) throw new Error(`Main sync ${response.status}: ${body?.message ?? response.statusText}`);
   return body;
 };
+const formatBusinessDate = (value: unknown) => {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const text = String(value ?? "");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+};
 
 export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -76,7 +83,7 @@ export const createMainSync = (options: MainSyncOptions, pool: PgCompatPool) => 
           const row = rows[0];
           if (!row) continue;
           const payload = typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : row.payload_json;
-          events.push({ id: item.event_id, eventType: item.event_type, createdAt: Number(row.updated_at), payload: { ...payload, id: row.id, businessDate: String(row.business_date), createdBy: { id: row.author_id, name: row.author_name, role: row.author_role }, status: row.settlement_status, updatedAt: Number(row.updated_at) } });
+          events.push({ id: item.event_id, eventType: item.event_type, createdAt: Number(row.updated_at), payload: { ...payload, id: row.id, businessDate: formatBusinessDate(row.business_date), createdBy: { id: row.author_id, name: row.author_name, role: row.author_role }, status: row.settlement_status, updatedAt: Number(row.updated_at) } });
         }
         if (events.length) {
           await authorized("/v1/sync/events", { method: "POST", body: JSON.stringify({ events }) });
