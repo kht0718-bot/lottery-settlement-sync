@@ -155,8 +155,8 @@ const requireDevice = async (request: Request, response: Response, next: NextFun
 registerStaffSyncRoutes(app, pool, requireDevice);
 
 const pairingAttempts = new Map<string, { count: number; resetAt: number }>();
-const permitPairing = (request: Request) => {
-  const key = request.ip || "unknown";
+const pairingAttemptKey = (request: Request, deviceFingerprint: string) => `${request.ip || "unknown"}:${deviceFingerprint}`;
+const permitPairing = (key: string) => {
   const now = Date.now();
   const current = pairingAttempts.get(key);
   const record = !current || current.resetAt <= now ? { count: 0, resetAt: now + 15 * 60 * 1000 } : current;
@@ -165,6 +165,7 @@ const permitPairing = (request: Request) => {
   pairingAttempts.set(key, record);
   return true;
 };
+const clearPairingAttempts = (key: string) => pairingAttempts.delete(key);
 
 const eventSchema = z.object({
   id: z.string().min(1).max(128),
@@ -184,7 +185,6 @@ app.get("/ready", async (_request: Request, response: Response) => { try { await
 
 app.post("/v1/pair", async (request: Request, response: Response, next: NextFunction) => {
   try {
-    if (!permitPairing(request)) return response.status(429).json({ message: "연결 코드 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." });
     console.info("[PAIR_REQUEST]", { contentLength: request.header("content-length") ?? null, keys: request.body && typeof request.body === "object" ? Object.keys(request.body).sort() : [] });
     const parsed = z.object({ pairCode: z.string().min(12).max(200), deviceName: z.string().min(1).max(120), deviceFingerprint: z.string().min(8).max(160).optional(), staffId: z.string().max(64).optional() }).safeParse(request.body);
     const submittedCode = parsed.success ? Buffer.from(parsed.data.pairCode) : Buffer.alloc(0);
@@ -194,6 +194,11 @@ app.post("/v1/pair", async (request: Request, response: Response, next: NextFunc
     const expectedCode = Buffer.from(pairCode);
     const codeMatches = submittedCode.length === expectedCode.length && crypto.timingSafeEqual(submittedCode, expectedCode);
     if (!codeMatches) return response.status(401).json({ message: "연결 코드가 올바르지 않습니다." });
+    const attemptKey = pairingAttemptKey(request, deviceFingerprint);
+    if (!permitPairing(attemptKey)) {
+      response.setHeader("Retry-After", "900");
+      return response.status(429).json({ message: "연결 코드 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." });
+    }
     // 동일 핸드폰의 앱 재설치·APK 교체는 신규 기기 등록이 아니라 재연결로 처리합니다.
     // 연결 코드 검증을 통과한 뒤 기존 deviceId와 정산 데이터는 유지하고 토큰만 재발급합니다.
     const connection = await pool.getConnection();
@@ -218,6 +223,7 @@ app.post("/v1/pair", async (request: Request, response: Response, next: NextFunc
         await connection.execute("INSERT INTO settlement_devices (id, deviceFingerprint, deviceName, staffId, status, lastSeenAt, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", [deviceId, deviceFingerprint, deviceName, staffId, now, now, now]);
       }
       await connection.commit();
+      clearPairingAttempts(attemptKey);
       response.status(existingDevice ? 200 : 201).json({ deviceId, reconnected: Boolean(existingDevice), token: encodeToken({ deviceId, expiresAt: now + 1000 * 60 * 60 * 24 * 180 }) });
     } catch (error) {
       await connection.rollback();
